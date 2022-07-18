@@ -373,6 +373,29 @@ public class TestKuduConnectorTest
     }
 
     @Override
+    public void testCreateTableWithLongTableName()
+    {
+        // Overridden because DDL in base class can't create Kudu table due to lack of primary key and required table properties
+        String baseTableName = "test_create_" + randomTableSuffix();
+        String validTableName = baseTableName + "z".repeat(256 - baseTableName.length());
+
+        assertUpdate("CREATE TABLE " + validTableName + "(" +
+                "id INT WITH (primary_key=true)," +
+                "a VARCHAR)" +
+                "WITH (partition_by_hash_columns = ARRAY['id'], partition_by_hash_buckets = 2)");
+        assertTrue(getQueryRunner().tableExists(getSession(), validTableName));
+        assertUpdate("DROP TABLE " + validTableName);
+
+        String invalidTableName = baseTableName + "z".repeat(256 - baseTableName.length() + 1);
+        assertThatThrownBy(() -> query("CREATE TABLE " + invalidTableName + "(" +
+                "id INT WITH (primary_key=true)," +
+                "a VARCHAR)" +
+                "WITH (partition_by_hash_columns = ARRAY['id'], partition_by_hash_buckets = 2)"))
+                .hasMessageContaining("invalid table name");
+        assertFalse(getQueryRunner().tableExists(getSession(), validTableName));
+    }
+
+    @Override
     public void testCreateTableWithColumnComment()
     {
         // TODO https://github.com/trinodb/trino/issues/12469 Support column comment when creating tables
@@ -510,17 +533,12 @@ public class TestKuduConnectorTest
     }
 
     @Override
-    public void testInsertRowConcurrently()
+    protected TestTable createTableWithOneIntegerColumn(String namePrefix)
     {
-        // TODO Support these test once kudu connector can create tables with default partitions
-        throw new SkipException("TODO");
-    }
-
-    @Override
-    public void testAddColumnConcurrently()
-    {
-        // TODO Support these test once kudu connector can create tables with default partitions
-        throw new SkipException("TODO");
+        // TODO Remove this overriding method once kudu connector can create tables with default partitions
+        return new TestTable(getQueryRunner()::execute, namePrefix,
+                "(col integer WITH (primary_key=true)) " +
+                "WITH (partition_by_hash_columns = ARRAY['col'], partition_by_hash_buckets = 2)");
     }
 
     @Test
@@ -534,8 +552,24 @@ public class TestKuduConnectorTest
     @Override
     public void testReadMetadataWithRelationsConcurrentModifications()
     {
-        // TODO Support these test once kudu connector can create tables with default partitions
-        throw new SkipException("TODO");
+        try {
+            super.testReadMetadataWithRelationsConcurrentModifications();
+        }
+        catch (Exception expected) {
+            // The test failure is not guaranteed
+            // TODO (https://github.com/trinodb/trino/issues/12974): shouldn't fail
+            assertThat(expected)
+                    .hasMessageMatching(".* table .* was deleted: Table deleted at .* UTC");
+            throw new SkipException("to be fixed");
+        }
+    }
+
+    @Override
+    protected String createTableSqlTemplateForConcurrentModifications()
+    {
+        // TODO Remove this overriding method once kudu connector can create tables with default partitions
+        return "CREATE TABLE %s(a integer WITH (primary_key=true)) " +
+                "WITH (partition_by_hash_columns = ARRAY['a'], partition_by_hash_buckets = 2)";
     }
 
     @Test

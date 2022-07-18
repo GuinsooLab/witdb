@@ -246,6 +246,7 @@ public class BenchmarkHashBuildAndJoinOperators
                     false,
                     false,
                     false,
+                    true,
                     types,
                     hashChannels,
                     hashChannel,

@@ -69,6 +69,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -172,6 +173,9 @@ public abstract class BaseIcebergConnectorTest
 
             case SUPPORTS_DELETE:
             case SUPPORTS_UPDATE:
+                return true;
+
+            case SUPPORTS_COMMENT_ON_VIEW:
                 return true;
             default:
                 return super.hasBehavior(connectorBehavior);
@@ -4396,6 +4400,19 @@ public abstract class BaseIcebergConnectorTest
                 format("SELECT * FROM %1$s EXCEPT (SELECT * FROM \"%1$s@%2$d\" EXCEPT SELECT * FROM \"%1$s@%3$d\")", tableName, ids.get(2), ids.get(1)),
                 "SELECT * FROM (VALUES(1,1), (3,3))");
         assertUpdate(format("DROP TABLE %s", tableName));
+    }
+
+    @Override
+    protected OptionalInt maxTableNameLength()
+    {
+        // This value depends on metastore type
+        return OptionalInt.of(255);
+    }
+
+    @Override
+    protected void verifyTableNameLengthFailurePermissible(Throwable e)
+    {
+        assertThat(e).hasMessageContaining("Failed to create file");
     }
 
     private Session prepareCleanUpSession()

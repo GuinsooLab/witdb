@@ -99,6 +99,7 @@ public final class JoinTestUtils
                 outputSingleMatch,
                 false,
                 hasFilter,
+                true,
                 probePages.getTypes(),
                 probePages.getHashChannels().orElseThrow(),
                 getHashChannelAsInt(probePages),

@@ -48,6 +48,7 @@ import io.trino.sql.analyzer.Output;
 import io.trino.sql.planner.PlanFragment;
 import io.trino.sql.planner.plan.TableScanNode;
 import io.trino.transaction.TransactionId;
+import io.trino.transaction.TransactionInfo;
 import io.trino.transaction.TransactionManager;
 import org.joda.time.DateTime;
 
@@ -163,6 +164,9 @@ public class QueryStateMachine
     @GuardedBy("dynamicFiltersStatsSupplierLock")
     private Supplier<DynamicFiltersStats> dynamicFiltersStatsSupplier = () -> DynamicFiltersStats.EMPTY;
     private final Object dynamicFiltersStatsSupplierLock = new Object();
+
+    private final AtomicBoolean committed = new AtomicBoolean();
+    private final AtomicBoolean consumed = new AtomicBoolean();
 
     private QueryStateMachine(
             String query,
@@ -917,15 +921,16 @@ public class QueryStateMachine
             return true;
         }
 
-        Optional<TransactionId> transactionId = session.getTransactionId();
-        if (transactionId.isPresent() && transactionManager.transactionExists(transactionId.get()) && transactionManager.isAutoCommit(transactionId.get())) {
-            ListenableFuture<Void> commitFuture = transactionManager.asyncCommit(transactionId.get());
+        Optional<TransactionInfo> transaction = session.getTransactionId().flatMap(transactionManager::getTransactionInfoIfExist);
+        if (transaction.isPresent() && transaction.get().isAutoCommitContext()) {
+            ListenableFuture<Void> commitFuture = transactionManager.asyncCommit(transaction.get().getTransactionId());
             Futures.addCallback(commitFuture, new FutureCallback<>()
             {
                 @Override
                 public void onSuccess(@Nullable Void result)
                 {
-                    transitionToFinished();
+                    committed.set(true);
+                    transitionToFinishedIfReady();
                 }
 
                 @Override
@@ -936,13 +941,28 @@ public class QueryStateMachine
             }, directExecutor());
         }
         else {
-            transitionToFinished();
+            committed.set(true);
+            transitionToFinishedIfReady();
         }
         return true;
     }
 
-    private void transitionToFinished()
+    public void resultsConsumed()
     {
+        consumed.set(true);
+        transitionToFinishedIfReady();
+    }
+
+    private void transitionToFinishedIfReady()
+    {
+        if (queryState.get().isDone()) {
+            return;
+        }
+
+        if (!committed.get() || !consumed.get()) {
+            return;
+        }
+
         queryStateTimer.endQuery();
 
         queryState.setIf(FINISHED, currentState -> !currentState.isDone());
@@ -967,18 +987,19 @@ public class QueryStateMachine
 
         try {
             QUERY_STATE_LOG.debug(throwable, "Query %s failed", queryId);
-            session.getTransactionId().ifPresent(transactionId -> {
+            session.getTransactionId().flatMap(transactionManager::getTransactionInfoIfExist).ifPresent(transaction -> {
                 try {
-                    if (transactionManager.transactionExists(transactionId) && transactionManager.isAutoCommit(transactionId)) {
-                        transactionManager.asyncAbort(transactionId);
-                        return;
+                    if (transaction.isAutoCommitContext()) {
+                        transactionManager.asyncAbort(transaction.getTransactionId());
+                    }
+                    else {
+                        transactionManager.fail(transaction.getTransactionId());
                     }
                 }
                 catch (RuntimeException e) {
                     // This shouldn't happen but be safe and just fail the transaction directly
                     QUERY_STATE_LOG.error(e, "Error aborting transaction for failed query. Transaction will be failed directly");
                 }
-                transactionManager.fail(transactionId);
             });
         }
         finally {
@@ -1003,12 +1024,12 @@ public class QueryStateMachine
 
         boolean canceled = queryState.setIf(FAILED, currentState -> !currentState.isDone());
         if (canceled) {
-            session.getTransactionId().ifPresent(transactionId -> {
-                if (transactionManager.isAutoCommit(transactionId)) {
-                    transactionManager.asyncAbort(transactionId);
+            session.getTransactionId().flatMap(transactionManager::getTransactionInfoIfExist).ifPresent(transaction -> {
+                if (transaction.isAutoCommitContext()) {
+                    transactionManager.asyncAbort(transaction.getTransactionId());
                 }
                 else {
-                    transactionManager.fail(transactionId);
+                    transactionManager.fail(transaction.getTransactionId());
                 }
             });
         }

@@ -34,6 +34,7 @@ import io.trino.sql.planner.OptimizerConfig.JoinDistributionType;
 import io.trino.sql.planner.Plan;
 import io.trino.sql.planner.plan.LimitNode;
 import io.trino.testing.sql.TestTable;
+import io.trino.testing.sql.TestView;
 import org.intellij.lang.annotations.Language;
 import org.testng.SkipException;
 import org.testng.annotations.DataProvider;
@@ -80,6 +81,7 @@ import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_ADD_COLUMN_WITH
 import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_ARRAY;
 import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_COMMENT_ON_COLUMN;
 import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_COMMENT_ON_TABLE;
+import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_COMMENT_ON_VIEW;
 import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_CREATE_MATERIALIZED_VIEW;
 import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_CREATE_SCHEMA;
 import static io.trino.testing.TestingConnectorBehavior.SUPPORTS_CREATE_TABLE;
@@ -1416,7 +1418,7 @@ public abstract class BaseConnectorTest
         Runnable writeInitialized = writeTasksInitialized::countDown;
         Supplier<Boolean> done = () -> incompleteReadTasks.get() == 0;
         List<Callable<Void>> writeTasks = new ArrayList<>();
-        writeTasks.add(createDropRepeatedly(writeInitialized, done, "concur_table", "CREATE TABLE %s(a integer)", "DROP TABLE %s"));
+        writeTasks.add(createDropRepeatedly(writeInitialized, done, "concur_table", createTableSqlTemplateForConcurrentModifications(), "DROP TABLE %s"));
         if (hasBehavior(SUPPORTS_CREATE_VIEW)) {
             writeTasks.add(createDropRepeatedly(writeInitialized, done, "concur_view", "CREATE VIEW %s AS SELECT 1 a", "DROP VIEW %s"));
         }
@@ -1449,6 +1451,12 @@ public abstract class BaseConnectorTest
             executor.shutdownNow();
         }
         assertTrue(executor.awaitTermination(10, SECONDS));
+    }
+
+    @Language("SQL")
+    protected String createTableSqlTemplateForConcurrentModifications()
+    {
+        return "CREATE TABLE %s(a integer)";
     }
 
     /**
@@ -1981,6 +1989,47 @@ public abstract class BaseConnectorTest
         assertFalse(getQueryRunner().tableExists(getSession(), tableNameLike));
     }
 
+    // TODO https://github.com/trinodb/trino/issues/13073 Add RENAME TABLE test with long table name
+    @Test
+    public void testCreateTableWithLongTableName()
+    {
+        skipTestUnless(hasBehavior(SUPPORTS_CREATE_TABLE));
+
+        String baseTableName = "test_create_" + randomTableSuffix();
+
+        int maxLength = maxTableNameLength()
+                // Assume 2^16 is enough for most use cases. Add a bit more to ensure 2^16 isn't actual limit.
+                .orElse(65536 + 5);
+
+        String validTableName = baseTableName + "z".repeat(maxLength - baseTableName.length());
+        assertUpdate("CREATE TABLE " + validTableName + " (a bigint)");
+        assertTrue(getQueryRunner().tableExists(getSession(), validTableName));
+        assertUpdate("DROP TABLE " + validTableName);
+
+        if (maxTableNameLength().isEmpty()) {
+            return;
+        }
+
+        String invalidTableName = validTableName + "z";
+        try {
+            assertUpdate("CREATE TABLE " + invalidTableName + " (a bigint)");
+        }
+        catch (Throwable e) {
+            verifyTableNameLengthFailurePermissible(e);
+        }
+        assertFalse(getQueryRunner().tableExists(getSession(), validTableName));
+    }
+
+    protected OptionalInt maxTableNameLength()
+    {
+        return OptionalInt.empty();
+    }
+
+    protected void verifyTableNameLengthFailurePermissible(Throwable e)
+    {
+        throw new AssertionError("Unexpected table name length failure", e);
+    }
+
     @Test
     public void testCreateTableWithTableComment()
     {
@@ -2371,6 +2420,53 @@ public abstract class BaseConnectorTest
     {
         String sql = format("SELECT comment FROM system.metadata.table_comments WHERE catalog_name = '%s' AND schema_name = '%s' AND table_name = '%s'", catalogName, schemaName, tableName);
         return (String) computeActual(sql).getOnlyValue();
+    }
+
+    @Test
+    public void testCommentView()
+    {
+        if (!hasBehavior(SUPPORTS_COMMENT_ON_VIEW)) {
+            if (hasBehavior(SUPPORTS_CREATE_VIEW)) {
+                try (TestView view = new TestView(getQueryRunner()::execute, "test_comment_view", "SELECT * FROM region")) {
+                    assertQueryFails("COMMENT ON VIEW " + view.getName() + " IS 'new comment'", "This connector does not support setting view comments");
+                }
+                return;
+            }
+            throw new SkipException("Skipping as connector does not support CREATE VIEW");
+        }
+
+        String catalogName = getSession().getCatalog().orElseThrow();
+        String schemaName = getSession().getSchema().orElseThrow();
+        try (TestView view = new TestView(getQueryRunner()::execute, "test_comment_view", "SELECT * FROM region")) {
+            // comment set
+            assertUpdate("COMMENT ON VIEW " + view.getName() + " IS 'new comment'");
+            assertThat((String) computeActual("SHOW CREATE VIEW " + view.getName()).getOnlyValue()).contains("COMMENT 'new comment'");
+            assertThat(getTableComment(catalogName, schemaName, view.getName())).isEqualTo("new comment");
+
+            // comment updated
+            assertUpdate("COMMENT ON VIEW " + view.getName() + " IS 'updated comment'");
+            assertThat(getTableComment(catalogName, schemaName, view.getName())).isEqualTo("updated comment");
+
+            // comment set to empty
+            assertUpdate("COMMENT ON VIEW " + view.getName() + " IS ''");
+            assertThat(getTableComment(catalogName, schemaName, view.getName())).isEqualTo("");
+
+            // comment deleted
+            assertUpdate("COMMENT ON VIEW " + view.getName() + " IS 'a comment'");
+            assertThat(getTableComment(catalogName, schemaName, view.getName())).isEqualTo("a comment");
+            assertUpdate("COMMENT ON VIEW " + view.getName() + " IS NULL");
+            assertThat(getTableComment(catalogName, schemaName, view.getName())).isEqualTo(null);
+        }
+
+        String viewName = "test_comment_view" + randomTableSuffix();
+        try {
+            // comment set when creating a table
+            assertUpdate("CREATE VIEW " + viewName + " COMMENT 'new view comment' AS SELECT * FROM region");
+            assertThat(getTableComment(catalogName, schemaName, viewName)).isEqualTo("new view comment");
+        }
+        finally {
+            assertUpdate("DROP VIEW IF EXISTS " + viewName);
+        }
     }
 
     @Test
@@ -3008,7 +3104,7 @@ public abstract class BaseConnectorTest
         int threads = 4;
         CyclicBarrier barrier = new CyclicBarrier(threads);
         ExecutorService executor = newFixedThreadPool(threads);
-        try (TestTable table = new TestTable(getQueryRunner()::execute, "test_insert", "(col integer)")) {
+        try (TestTable table = createTableWithOneIntegerColumn("test_insert")) {
             String tableName = table.getName();
 
             List<Future<OptionalInt>> futures = IntStream.range(0, threads)
@@ -3076,7 +3172,7 @@ public abstract class BaseConnectorTest
         int threads = 4;
         CyclicBarrier barrier = new CyclicBarrier(threads);
         ExecutorService executor = newFixedThreadPool(threads);
-        try (TestTable table = new TestTable(getQueryRunner()::execute, "test_add_column", "(col integer)")) {
+        try (TestTable table = createTableWithOneIntegerColumn("test_add_column")) {
             String tableName = table.getName();
 
             List<Future<Optional<String>>> futures = IntStream.range(0, threads)
@@ -3126,6 +3222,11 @@ public abstract class BaseConnectorTest
     {
         // By default, do not expect ALTER TABLE ADD COLUMN to fail in case of concurrent inserts
         throw new AssertionError("Unexpected concurrent add column failure", e);
+    }
+
+    protected TestTable createTableWithOneIntegerColumn(String namePrefix)
+    {
+        return new TestTable(getQueryRunner()::execute, namePrefix, "(col integer)");
     }
 
     @Test

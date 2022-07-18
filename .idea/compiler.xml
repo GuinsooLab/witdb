@@ -10,8 +10,8 @@
         <module name="trino-testing-services" />
         <module name="trino-thrift-testing-server" />
         <module name="trino-password-authenticators" />
-        <module name="trino-client" />
         <module name="trino-accumulo-iterators" />
+        <module name="trino-client" />
         <module name="trino-accumulo" />
         <module name="trino-tpcds" />
         <module name="trino-redshift" />
@@ -21,40 +21,40 @@
         <module name="trino-product-tests" />
         <module name="trino-geospatial-toolkit" />
         <module name="trino-spi" />
-        <module name="trino-mongodb" />
-        <module name="trino-phoenix5" />
         <module name="trino-product-tests-launcher" />
+        <module name="trino-phoenix5" />
+        <module name="trino-mongodb" />
         <module name="trino-record-decoder" />
-        <module name="trino-benchto-benchmarks" />
-        <module name="trino-testing-containers" />
         <module name="trino-tests" />
+        <module name="trino-testing-containers" />
+        <module name="trino-benchto-benchmarks" />
         <module name="trino-blackhole" />
         <module name="trino-main" />
         <module name="trino-ml" />
         <module name="trino-exchange-filesystem" />
-        <module name="trino-redis" />
         <module name="trino-testing" />
+        <module name="trino-redis" />
         <module name="trino-orc" />
-        <module name="trino-thrift" />
         <module name="trino-clickhouse" />
+        <module name="trino-thrift" />
         <module name="trino-testing-kafka" />
         <module name="trino-server-main" />
         <module name="trino-collect" />
         <module name="trino-proxy" />
         <module name="trino-server-dev" />
-        <module name="trino-sqlserver" />
         <module name="trino-array" />
+        <module name="trino-sqlserver" />
         <module name="trino-verifier" />
         <module name="trino-benchmark" />
         <module name="trino-cassandra" />
         <module name="trino-session-property-managers" />
-        <module name="trino-plugin-reader" />
         <module name="trino-test-jdbc-compatibility-old-driver" />
+        <module name="trino-plugin-reader" />
         <module name="trino-memory-context" />
         <module name="trino-kinesis" />
         <module name="trino-mysql" />
-        <module name="trino-server-rpm" />
         <module name="trino-parser" />
+        <module name="trino-server-rpm" />
         <module name="trino-delta-lake" />
         <module name="trino-tpch" />
         <module name="trino-geospatial" />
@@ -66,13 +66,12 @@
         <module name="trino-mariadb" />
         <module name="trino-prometheus" />
         <module name="trino-resource-group-managers" />
-        <module name="trino-postgresql" />
         <module name="trino-hadoop-toolkit" />
+        <module name="trino-postgresql" />
         <module name="trino-kudu" />
         <module name="trino-singlestore" />
-        <module name="trino-thrift-api" />
-        <module name="trino-base-jdbc" />
         <module name="trino-druid" />
+        <module name="trino-base-jdbc" />
         <module name="trino-cli" />
         <module name="trino-jdbc" />
         <module name="trino-bigquery" />
@@ -80,107 +79,141 @@
         <module name="trino-plugin-toolkit" />
         <module name="trino-raptor-legacy" />
         <module name="trino-hive-hadoop2" />
-        <module name="trino-oracle" />
         <module name="trino-jmx" />
+        <module name="trino-oracle" />
         <module name="trino-http-event-listener" />
         <module name="trino-hive" />
-        <module name="trino-matching" />
         <module name="trino-teradata-functions" />
+        <module name="trino-matching" />
         <module name="trino-testing-resources" />
         <module name="trino-pinot" />
         <module name="trino-memory" />
         <module name="trino-example-http" />
+        <module name="trino-phoenix5-patched" />
         <module name="trino-server" />
+      </profile>
+      <profile name="Annotation profile for trino-root" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <processorPath useClasspath="false">
+          <entry name="$MAVEN_REPOSITORY$/io/airlift/drift/drift-javadoc/1.14/drift-javadoc-1.14.jar" />
+          <entry name="$MAVEN_REPOSITORY$/io/airlift/drift/drift-api/1.14/drift-api-1.14.jar" />
+          <entry name="$MAVEN_REPOSITORY$/com/squareup/javapoet/1.9.0/javapoet-1.9.0.jar" />
+          <entry name="$MAVEN_REPOSITORY$/io/takari/maven/plugins/takari-plugin-testing/2.9.1/takari-plugin-testing-2.9.1.jar" />
+          <entry name="$MAVEN_REPOSITORY$/junit/junit/4.12/junit-4.12.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/codehaus/plexus/plexus-utils/3.0.21/plexus-utils-3.0.21.jar" />
+          <entry name="$MAVEN_REPOSITORY$/io/takari/maven/plugins/takari-plugin-integration-testing/2.9.1/takari-plugin-integration-testing-2.9.1.pom" />
+          <entry name="$MAVEN_REPOSITORY$/org/apache/commons/commons-exec/1.2/commons-exec-1.2.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/codehaus/plexus/plexus-classworlds/2.5.2/plexus-classworlds-2.5.2.jar" />
+          <entry name="$MAVEN_REPOSITORY$/io/takari/m2e/workspace/org.eclipse.m2e.workspace.cli/0.4.0/org.eclipse.m2e.workspace.cli-0.4.0.jar" />
+          <entry name="$MAVEN_REPOSITORY$/javax/inject/javax.inject/1/javax.inject-1.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/codehaus/plexus/plexus-component-annotations/1.5.5/plexus-component-annotations-1.5.5.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/apache/commons/commons-compress/1.9/commons-compress-1.9.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/assertj/assertj-core/3.5.2/assertj-core-3.5.2.jar" />
+          <entry name="$MAVEN_REPOSITORY$/com/google/guava/guava/24.1-jre/guava-24.1-jre.jar" />
+          <entry name="$MAVEN_REPOSITORY$/com/google/code/findbugs/jsr305/1.3.9/jsr305-1.3.9.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/checkerframework/checker-compat-qual/2.0.0/checker-compat-qual-2.0.0.jar" />
+          <entry name="$MAVEN_REPOSITORY$/com/google/errorprone/error_prone_annotations/2.1.3/error_prone_annotations-2.1.3.jar" />
+          <entry name="$MAVEN_REPOSITORY$/com/google/j2objc/j2objc-annotations/1.1/j2objc-annotations-1.1.jar" />
+          <entry name="$MAVEN_REPOSITORY$/org/codehaus/mojo/animal-sniffer-annotations/1.14/animal-sniffer-annotations-1.14.jar" />
+        </processorPath>
+        <module name="trino-thrift-api" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
-      <module name="trino-accumulo" target="1.5" />
-      <module name="trino-accumulo-iterators" target="1.5" />
-      <module name="trino-array" target="1.5" />
-      <module name="trino-atop" target="1.5" />
-      <module name="trino-base-jdbc" target="1.5" />
-      <module name="trino-benchmark" target="1.5" />
-      <module name="trino-benchto-benchmarks" target="1.5" />
-      <module name="trino-bigquery" target="1.5" />
-      <module name="trino-blackhole" target="1.5" />
-      <module name="trino-cassandra" target="1.5" />
-      <module name="trino-cli" target="1.5" />
-      <module name="trino-clickhouse" target="1.5" />
-      <module name="trino-client" target="1.5" />
-      <module name="trino-collect" target="1.5" />
-      <module name="trino-delta-lake" target="1.5" />
-      <module name="trino-docs" target="1.5" />
-      <module name="trino-druid" target="1.5" />
-      <module name="trino-elasticsearch" target="1.5" />
-      <module name="trino-example-http" target="1.5" />
-      <module name="trino-exchange-filesystem" target="1.5" />
-      <module name="trino-faulttolerant-tests" target="1.5" />
-      <module name="trino-geospatial" target="1.5" />
-      <module name="trino-geospatial-toolkit" target="1.5" />
-      <module name="trino-google-sheets" target="1.5" />
-      <module name="trino-hadoop-toolkit" target="1.5" />
-      <module name="trino-hive" target="1.5" />
-      <module name="trino-hive-hadoop2" target="1.5" />
-      <module name="trino-http-event-listener" target="1.5" />
-      <module name="trino-iceberg" target="1.5" />
-      <module name="trino-jdbc" target="1.5" />
-      <module name="trino-jmx" target="1.5" />
-      <module name="trino-kafka" target="1.5" />
-      <module name="trino-kinesis" target="1.5" />
-      <module name="trino-kudu" target="1.5" />
-      <module name="trino-local-file" target="1.5" />
-      <module name="trino-main" target="1.5" />
-      <module name="trino-mariadb" target="1.5" />
-      <module name="trino-matching" target="1.5" />
-      <module name="trino-memory" target="1.5" />
-      <module name="trino-memory-context" target="1.5" />
-      <module name="trino-ml" target="1.5" />
-      <module name="trino-mongodb" target="1.5" />
-      <module name="trino-mysql" target="1.5" />
-      <module name="trino-oracle" target="1.5" />
-      <module name="trino-orc" target="1.5" />
-      <module name="trino-parquet" target="1.5" />
-      <module name="trino-parser" target="1.5" />
-      <module name="trino-password-authenticators" target="1.5" />
-      <module name="trino-phoenix5" target="1.5" />
-      <module name="trino-pinot" target="1.5" />
-      <module name="trino-plugin-reader" target="1.5" />
-      <module name="trino-plugin-toolkit" target="1.5" />
-      <module name="trino-postgresql" target="1.5" />
-      <module name="trino-product-tests" target="1.5" />
-      <module name="trino-product-tests-launcher" target="1.5" />
-      <module name="trino-prometheus" target="1.5" />
-      <module name="trino-proxy" target="1.5" />
-      <module name="trino-raptor-legacy" target="1.5" />
-      <module name="trino-rcfile" target="1.5" />
-      <module name="trino-record-decoder" target="1.5" />
-      <module name="trino-redis" target="1.5" />
-      <module name="trino-redshift" target="1.5" />
-      <module name="trino-resource-group-managers" target="1.5" />
-      <module name="trino-server" target="1.5" />
-      <module name="trino-server-dev" target="1.5" />
-      <module name="trino-server-main" target="1.5" />
-      <module name="trino-server-rpm" target="1.5" />
-      <module name="trino-session-property-managers" target="1.5" />
-      <module name="trino-singlestore" target="1.5" />
-      <module name="trino-spi" target="1.5" />
-      <module name="trino-sqlserver" target="1.5" />
-      <module name="trino-teradata-functions" target="1.5" />
-      <module name="trino-test-jdbc-compatibility-old-driver" target="1.5" />
-      <module name="trino-test-jdbc-compatibility-old-server" target="1.5" />
-      <module name="trino-testing" target="1.5" />
-      <module name="trino-testing-containers" target="1.5" />
-      <module name="trino-testing-kafka" target="1.5" />
-      <module name="trino-testing-resources" target="1.5" />
-      <module name="trino-testing-services" target="1.5" />
-      <module name="trino-tests" target="1.5" />
-      <module name="trino-thrift" target="1.5" />
-      <module name="trino-thrift-api" target="1.5" />
-      <module name="trino-thrift-testing-server" target="1.5" />
-      <module name="trino-tpcds" target="1.5" />
-      <module name="trino-tpch" target="1.5" />
-      <module name="trino-verifier" target="1.5" />
-      <module name="witdb" target="1.5" />
+      <module name="trino-docs" target="11" />
     </bytecodeTargetLevel>
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="trino-accumulo" options="-parameters" />
+      <module name="trino-accumulo-iterators" options="-parameters" />
+      <module name="trino-array" options="-parameters" />
+      <module name="trino-atop" options="-parameters" />
+      <module name="trino-base-jdbc" options="-parameters" />
+      <module name="trino-benchmark" options="-parameters" />
+      <module name="trino-benchto-benchmarks" options="-parameters" />
+      <module name="trino-bigquery" options="-parameters" />
+      <module name="trino-blackhole" options="-parameters" />
+      <module name="trino-cassandra" options="-parameters" />
+      <module name="trino-cli" options="-parameters" />
+      <module name="trino-clickhouse" options="-parameters" />
+      <module name="trino-client" options="-parameters" />
+      <module name="trino-collect" options="-parameters" />
+      <module name="trino-delta-lake" options="-parameters" />
+      <module name="trino-druid" options="-parameters" />
+      <module name="trino-elasticsearch" options="-parameters" />
+      <module name="trino-example-http" options="-parameters" />
+      <module name="trino-exchange-filesystem" options="-parameters" />
+      <module name="trino-faulttolerant-tests" options="-parameters" />
+      <module name="trino-geospatial" options="-parameters" />
+      <module name="trino-geospatial-toolkit" options="-parameters" />
+      <module name="trino-google-sheets" options="-parameters" />
+      <module name="trino-hadoop-toolkit" options="-parameters" />
+      <module name="trino-hive" options="-parameters" />
+      <module name="trino-hive-hadoop2" options="-parameters" />
+      <module name="trino-http-event-listener" options="-parameters" />
+      <module name="trino-iceberg" options="-parameters" />
+      <module name="trino-jdbc" options="-parameters" />
+      <module name="trino-jmx" options="-parameters" />
+      <module name="trino-kafka" options="-parameters" />
+      <module name="trino-kinesis" options="-parameters" />
+      <module name="trino-kudu" options="-parameters" />
+      <module name="trino-local-file" options="-parameters" />
+      <module name="trino-main" options="-parameters" />
+      <module name="trino-mariadb" options="-parameters" />
+      <module name="trino-matching" options="-parameters" />
+      <module name="trino-memory" options="-parameters" />
+      <module name="trino-memory-context" options="-parameters" />
+      <module name="trino-ml" options="-parameters" />
+      <module name="trino-mongodb" options="-parameters" />
+      <module name="trino-mysql" options="-parameters" />
+      <module name="trino-oracle" options="-parameters" />
+      <module name="trino-orc" options="-parameters" />
+      <module name="trino-parquet" options="-parameters" />
+      <module name="trino-parser" options="-parameters" />
+      <module name="trino-password-authenticators" options="-parameters" />
+      <module name="trino-phoenix5" options="-parameters" />
+      <module name="trino-phoenix5-patched" options="-parameters" />
+      <module name="trino-pinot" options="-parameters" />
+      <module name="trino-plugin-reader" options="-parameters" />
+      <module name="trino-plugin-toolkit" options="-parameters" />
+      <module name="trino-postgresql" options="-parameters" />
+      <module name="trino-product-tests" options="-parameters" />
+      <module name="trino-product-tests-launcher" options="-parameters" />
+      <module name="trino-prometheus" options="-parameters" />
+      <module name="trino-proxy" options="-parameters" />
+      <module name="trino-raptor-legacy" options="-parameters" />
+      <module name="trino-rcfile" options="-parameters" />
+      <module name="trino-record-decoder" options="-parameters" />
+      <module name="trino-redis" options="-parameters" />
+      <module name="trino-redshift" options="-parameters" />
+      <module name="trino-resource-group-managers" options="-parameters" />
+      <module name="trino-server" options="-parameters" />
+      <module name="trino-server-dev" options="-parameters" />
+      <module name="trino-server-main" options="-parameters" />
+      <module name="trino-server-rpm" options="-parameters" />
+      <module name="trino-session-property-managers" options="-parameters" />
+      <module name="trino-singlestore" options="-parameters" />
+      <module name="trino-spi" options="-parameters" />
+      <module name="trino-sqlserver" options="-parameters" />
+      <module name="trino-teradata-functions" options="-parameters" />
+      <module name="trino-test-jdbc-compatibility-old-driver" options="-parameters" />
+      <module name="trino-test-jdbc-compatibility-old-server" options="-parameters" />
+      <module name="trino-testing" options="-parameters" />
+      <module name="trino-testing-containers" options="-parameters" />
+      <module name="trino-testing-kafka" options="-parameters" />
+      <module name="trino-testing-resources" options="-parameters" />
+      <module name="trino-testing-services" options="-parameters" />
+      <module name="trino-tests" options="-parameters" />
+      <module name="trino-thrift" options="-parameters" />
+      <module name="trino-thrift-api" options="-parameters" />
+      <module name="trino-thrift-testing-server" options="-parameters" />
+      <module name="trino-tpcds" options="-parameters" />
+      <module name="trino-tpch" options="-parameters" />
+      <module name="trino-verifier" options="-parameters" />
+    </option>
   </component>
 </project>
