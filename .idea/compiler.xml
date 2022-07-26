@@ -10,51 +10,51 @@
         <module name="trino-testing-services" />
         <module name="trino-thrift-testing-server" />
         <module name="trino-password-authenticators" />
-        <module name="trino-accumulo-iterators" />
         <module name="trino-client" />
-        <module name="trino-accumulo" />
+        <module name="trino-accumulo-iterators" />
         <module name="trino-tpcds" />
+        <module name="trino-accumulo" />
         <module name="trino-redshift" />
         <module name="trino-iceberg" />
         <module name="trino-elasticsearch" />
         <module name="trino-kafka" />
         <module name="trino-product-tests" />
-        <module name="trino-geospatial-toolkit" />
         <module name="trino-spi" />
-        <module name="trino-product-tests-launcher" />
-        <module name="trino-phoenix5" />
+        <module name="trino-geospatial-toolkit" />
         <module name="trino-mongodb" />
+        <module name="trino-phoenix5" />
+        <module name="trino-product-tests-launcher" />
         <module name="trino-record-decoder" />
+        <module name="trino-benchto-benchmarks" />
         <module name="trino-tests" />
         <module name="trino-testing-containers" />
-        <module name="trino-benchto-benchmarks" />
         <module name="trino-blackhole" />
         <module name="trino-main" />
         <module name="trino-ml" />
         <module name="trino-exchange-filesystem" />
-        <module name="trino-testing" />
         <module name="trino-redis" />
+        <module name="trino-testing" />
         <module name="trino-orc" />
-        <module name="trino-clickhouse" />
         <module name="trino-thrift" />
+        <module name="trino-clickhouse" />
         <module name="trino-testing-kafka" />
         <module name="trino-server-main" />
         <module name="trino-collect" />
         <module name="trino-proxy" />
         <module name="trino-server-dev" />
-        <module name="trino-array" />
         <module name="trino-sqlserver" />
+        <module name="trino-array" />
         <module name="trino-verifier" />
         <module name="trino-benchmark" />
-        <module name="trino-cassandra" />
         <module name="trino-session-property-managers" />
+        <module name="trino-cassandra" />
         <module name="trino-test-jdbc-compatibility-old-driver" />
         <module name="trino-plugin-reader" />
         <module name="trino-memory-context" />
         <module name="trino-kinesis" />
         <module name="trino-mysql" />
-        <module name="trino-parser" />
         <module name="trino-server-rpm" />
+        <module name="trino-parser" />
         <module name="trino-delta-lake" />
         <module name="trino-tpch" />
         <module name="trino-geospatial" />
@@ -66,12 +66,12 @@
         <module name="trino-mariadb" />
         <module name="trino-prometheus" />
         <module name="trino-resource-group-managers" />
-        <module name="trino-hadoop-toolkit" />
         <module name="trino-postgresql" />
+        <module name="trino-hadoop-toolkit" />
         <module name="trino-kudu" />
         <module name="trino-singlestore" />
-        <module name="trino-druid" />
         <module name="trino-base-jdbc" />
+        <module name="trino-druid" />
         <module name="trino-cli" />
         <module name="trino-jdbc" />
         <module name="trino-bigquery" />
@@ -88,9 +88,21 @@
         <module name="trino-testing-resources" />
         <module name="trino-pinot" />
         <module name="trino-memory" />
-        <module name="trino-example-http" />
         <module name="trino-phoenix5-patched" />
+        <module name="trino-example-http" />
         <module name="trino-server" />
+      </profile>
+      <profile name="Annotation profile for Unknown" enabled="true">
+        <sourceOutputDir name="../../target/generated-sources/annotations" />
+        <sourceTestOutputDir name="../../target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <module name="wrapper" />
+      </profile>
+      <profile name="Annotation profile for .mvn" enabled="true">
+        <sourceOutputDir name="../target/generated-sources/annotations" />
+        <sourceTestOutputDir name="../target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <module name=".mvn" />
       </profile>
       <profile name="Annotation profile for trino-root" enabled="true">
         <sourceOutputDir name="target/generated-sources/annotations" />
@@ -162,7 +174,7 @@
       <module name="trino-kinesis" options="-parameters" />
       <module name="trino-kudu" options="-parameters" />
       <module name="trino-local-file" options="-parameters" />
-      <module name="trino-main" options="-parameters" />
+      <module name="trino-main" options="-parameters --add-modules java.base" />
       <module name="trino-mariadb" options="-parameters" />
       <module name="trino-matching" options="-parameters" />
       <module name="trino-memory" options="-parameters" />
@@ -207,7 +219,7 @@
       <module name="trino-testing-kafka" options="-parameters" />
       <module name="trino-testing-resources" options="-parameters" />
       <module name="trino-testing-services" options="-parameters" />
-      <module name="trino-tests" options="-parameters" />
+      <module name="trino-tests" options="-parameters --add-modules java.base" />
       <module name="trino-thrift" options="-parameters" />
       <module name="trino-thrift-api" options="-parameters" />
       <module name="trino-thrift-testing-server" options="-parameters" />
