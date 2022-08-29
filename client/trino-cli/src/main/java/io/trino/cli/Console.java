@@ -84,7 +84,7 @@ public class Console
 {
     public static final Set<String> STATEMENT_DELIMITERS = ImmutableSet.of(";", "\\G");
 
-    private static final String PROMPT_NAME = "trino";
+    private static final String PROMPT_NAME = "witdb";
     private static final Duration EXIT_DELAY = new Duration(3, SECONDS);
 
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message and exit")
