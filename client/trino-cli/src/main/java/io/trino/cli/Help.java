@@ -33,7 +33,8 @@ public final class Help
                 "SHOW CATALOGS [LIKE <pattern>]\n" +
                 "SHOW SCHEMAS [FROM <catalog>] [LIKE <pattern>]\n" +
                 "SHOW TABLES [FROM <schema>] [LIKE <pattern>]\n" +
-                "USE [<catalog>.]<schema>\n" +
+                "USE [<catalog>.]<schema>\n\n" +
+                "Documentation: https://ciusji.gitbook.io/guinsoolab/products/query-engine/witdb/overview\n" +
                 "";
     }
 }
