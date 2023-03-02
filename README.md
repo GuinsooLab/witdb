@@ -1,16 +1,20 @@
 <div align="right">
-    <img src="/assets/guinsoolab-badge.png" width="60" alt="badge">
+    <img src="https://raw.githubusercontent.com/GuinsooLab/glab/main/src/images/guinsoolab-badge.png" height="60" alt="badge">
     <br />
 </div>
 <div align="center">
-    <img src="/assets/witdb.svg" width=120 alt="logo" />
+    <img src="https://raw.githubusercontent.com/GuinsooLab/glab/main/src/images/guinsoolab-witdb.svg" alt="logo" height="100" />
     <br />
-    <small>a fast distributed SQL query engine</small>
+    <br />
 </div>
 
 # WitDB
 
-Witdb is a fast distributed SQL query engine for big data analytics.
+WitDB is a distributed SQL query engine designed to query large data sets distributed over one or more heterogeneous data sources.
+
+WitDB is a tool designed to efficiently query vast amounts of data using distributed queries. If you work with terabytes or petabytes of data, you are likely using tools that interact with Hadoop and HDFS. WitDB was designed as an alternative to tools that query HDFS using pipelines of MapReduce jobs, such as Hive or Pig, but WitDB is not limited to accessing HDFS. 
+
+WitDB can be and has been extended to operate over different kinds of data sources, including traditional relational databases and other data sources such as Cassandra.
 
 ## Development
 
