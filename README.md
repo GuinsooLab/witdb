@@ -89,3 +89,10 @@ Run a query to see the nodes in the cluster:
 Run a query against the TPCH connector:
 
     SELECT * FROM tpch.tiny.region;
+    
+## License
+
+WitDB is released under [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+
+<img src="https://raw.githubusercontent.com/GuinsooLab/glab/main/src/images/guinsoolab-group.svg" width="120" alt="license" />
+
