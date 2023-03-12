@@ -15,13 +15,13 @@
 package io.trino.spi.block;
 
 import io.trino.spi.type.MapType;
-import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 
 import java.util.Optional;
 import java.util.function.ObjLongConsumer;
 
+import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.trino.spi.block.BlockUtil.copyIsNullAndAppendNull;
 import static io.trino.spi.block.BlockUtil.copyOffsetsAndAppendNull;
@@ -32,11 +32,12 @@ import static java.util.Objects.requireNonNull;
 public class MapBlock
         extends AbstractMapBlock
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(MapBlock.class).instanceSize();
+    private static final int INSTANCE_SIZE = instanceSize(MapBlock.class);
 
     private final int startOffset;
     private final int positionCount;
 
+    @Nullable
     private final boolean[] mapIsNull;
     private final int[] offsets;
     private final Block keyBlock;
@@ -202,6 +203,12 @@ public class MapBlock
     }
 
     @Override
+    public boolean mayHaveNull()
+    {
+        return mapIsNull != null;
+    }
+
+    @Override
     public int getPositionCount()
     {
         return positionCount;
@@ -244,7 +251,7 @@ public class MapBlock
             consumer.accept(mapIsNull, sizeOf(mapIsNull));
         }
         consumer.accept(hashTables, hashTables.getRetainedSizeInBytes());
-        consumer.accept(this, (long) INSTANCE_SIZE);
+        consumer.accept(this, INSTANCE_SIZE);
     }
 
     @Override

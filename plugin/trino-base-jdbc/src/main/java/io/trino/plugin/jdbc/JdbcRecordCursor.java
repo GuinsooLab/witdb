@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -57,6 +58,7 @@ public class JdbcRecordCursor
     private final JdbcClient jdbcClient;
     private final Connection connection;
     private final PreparedStatement statement;
+    private final AtomicLong readTimeNanos = new AtomicLong(0);
     @Nullable
     private ResultSet resultSet;
     private boolean closed;
@@ -76,12 +78,12 @@ public class JdbcRecordCursor
         objectReadFunctions = new ObjectReadFunction[columnHandles.size()];
 
         try {
-            connection = jdbcClient.getConnection(session, split);
+            connection = jdbcClient.getConnection(session, split, table);
 
             for (int i = 0; i < this.columnHandles.length; i++) {
                 JdbcColumnHandle columnHandle = columnHandles.get(i);
                 ColumnMapping columnMapping = jdbcClient.toColumnMapping(session, connection, columnHandle.getJdbcTypeHandle())
-                        .orElseThrow(() -> new VerifyException("Unsupported column type"));
+                        .orElseThrow(() -> new VerifyException("Column %s has unsupported type %s".formatted(columnHandle.getColumnName(), columnHandle.getJdbcTypeHandle())));
                 verify(
                         columnHandle.getColumnType().equals(columnMapping.getType()),
                         "Type mismatch: column handle has type %s but %s is mapped to %s",
@@ -117,7 +119,7 @@ public class JdbcRecordCursor
     @Override
     public long getReadTimeNanos()
     {
-        return 0;
+        return readTimeNanos.get();
     }
 
     @Override
@@ -141,6 +143,7 @@ public class JdbcRecordCursor
 
         try {
             if (resultSet == null) {
+                long start = System.nanoTime();
                 Future<ResultSet> resultSetFuture = executor.submit(() -> {
                     log.debug("Executing: %s", statement);
                     return statement.executeQuery();
@@ -151,8 +154,7 @@ public class JdbcRecordCursor
                     resultSet = resultSetFuture.get();
                 }
                 catch (ExecutionException e) {
-                    if (e.getCause() instanceof SQLException) {
-                        SQLException cause = (SQLException) e.getCause();
+                    if (e.getCause() instanceof SQLException cause) {
                         SQLException sqlException = new SQLException(cause.getMessage(), cause.getSQLState(), cause.getErrorCode(), e);
                         if (cause.getNextException() != null) {
                             sqlException.setNextException(cause.getNextException());
@@ -165,6 +167,9 @@ public class JdbcRecordCursor
                     Thread.currentThread().interrupt();
                     resultSetFuture.cancel(true);
                     throw new RuntimeException(e);
+                }
+                finally {
+                    readTimeNanos.addAndGet(System.nanoTime() - start);
                 }
             }
             return resultSet.next();

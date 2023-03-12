@@ -19,12 +19,13 @@ import com.google.common.primitives.SignedBytes;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.InsertManyOptions;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import io.trino.spi.Page;
 import io.trino.spi.StandardErrorCode;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.Block;
 import io.trino.spi.connector.ConnectorPageSink;
-import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.connector.ConnectorPageSinkId;
 import io.trino.spi.type.BigintType;
 import io.trino.spi.type.BooleanType;
 import io.trino.spi.type.CharType;
@@ -47,15 +48,17 @@ import org.bson.Document;
 import org.bson.types.Binary;
 import org.bson.types.ObjectId;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 import static io.trino.plugin.mongodb.ObjectIdType.OBJECT_ID;
 import static io.trino.plugin.mongodb.TypeUtils.isArrayType;
@@ -68,11 +71,12 @@ import static io.trino.spi.type.DateTimeEncoding.unpackMillisUtc;
 import static io.trino.spi.type.Decimals.readBigDecimal;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.trino.spi.type.Timestamps.MICROSECONDS_PER_MILLISECOND;
-import static io.trino.spi.type.Timestamps.PICOSECONDS_PER_MILLISECOND;
+import static io.trino.spi.type.Timestamps.PICOSECONDS_PER_NANOSECOND;
 import static io.trino.spi.type.Timestamps.roundDiv;
 import static java.lang.Float.intBitsToFloat;
 import static java.lang.Math.floorDiv;
 import static java.lang.Math.toIntExact;
+import static java.time.ZoneOffset.UTC;
 import static java.util.Collections.unmodifiableList;
 import static java.util.Collections.unmodifiableMap;
 import static java.util.Objects.requireNonNull;
@@ -82,30 +86,37 @@ public class MongoPageSink
         implements ConnectorPageSink
 {
     private final MongoSession mongoSession;
-    private final SchemaTableName schemaTableName;
+    private final RemoteTableName remoteTableName;
     private final List<MongoColumnHandle> columns;
     private final String implicitPrefix;
+    private final Optional<String> pageSinkIdColumnName;
+    private final ConnectorPageSinkId pageSinkId;
 
     public MongoPageSink(
             MongoClientConfig config,
             MongoSession mongoSession,
-            SchemaTableName schemaTableName,
-            List<MongoColumnHandle> columns)
+            RemoteTableName remoteTableName,
+            List<MongoColumnHandle> columns,
+            Optional<String> pageSinkIdColumnName,
+            ConnectorPageSinkId pageSinkId)
     {
         this.mongoSession = mongoSession;
-        this.schemaTableName = schemaTableName;
+        this.remoteTableName = remoteTableName;
         this.columns = columns;
         this.implicitPrefix = requireNonNull(config.getImplicitRowFieldPrefix(), "config.getImplicitRowFieldPrefix() is null");
+        this.pageSinkIdColumnName = requireNonNull(pageSinkIdColumnName, "pageSinkIdColumnName is null");
+        this.pageSinkId = requireNonNull(pageSinkId, "pageSinkId is null");
     }
 
     @Override
     public CompletableFuture<?> appendPage(Page page)
     {
-        MongoCollection<Document> collection = mongoSession.getCollection(schemaTableName);
+        MongoCollection<Document> collection = mongoSession.getCollection(remoteTableName);
         List<Document> batch = new ArrayList<>(page.getPositionCount());
 
         for (int position = 0; position < page.getPositionCount(); position++) {
             Document doc = new Document();
+            pageSinkIdColumnName.ifPresent(columnName -> doc.append(columnName, pageSinkId.getId()));
 
             for (int channel = 0; channel < page.getChannelCount(); channel++) {
                 MongoColumnHandle column = columns.get(channel);
@@ -162,19 +173,21 @@ public class MongoPageSink
         }
         if (type.equals(DateType.DATE)) {
             long days = type.getLong(block, position);
-            return new Date(TimeUnit.DAYS.toMillis(days));
+            return LocalDate.ofEpochDay(days);
         }
-        if (type.equals(TimeType.TIME)) {
+        if (type.equals(TimeType.TIME_MILLIS)) {
             long picos = type.getLong(block, position);
-            return new Date(roundDiv(picos, PICOSECONDS_PER_MILLISECOND));
+            return LocalTime.ofNanoOfDay(roundDiv(picos, PICOSECONDS_PER_NANOSECOND));
         }
         if (type.equals(TIMESTAMP_MILLIS)) {
             long millisUtc = floorDiv(type.getLong(block, position), MICROSECONDS_PER_MILLISECOND);
-            return new Date(millisUtc);
+            Instant instant = Instant.ofEpochMilli(millisUtc);
+            return LocalDateTime.ofInstant(instant, UTC);
         }
         if (type.equals(TimestampWithTimeZoneType.TIMESTAMP_TZ_MILLIS)) {
             long millisUtc = unpackMillisUtc(type.getLong(block, position));
-            return new Date(millisUtc);
+            Instant instant = Instant.ofEpochMilli(millisUtc);
+            return LocalDateTime.ofInstant(instant, UTC);
         }
         if (type instanceof DecimalType) {
             return readBigDecimal((DecimalType) type, block, position);
@@ -261,7 +274,7 @@ public class MongoPageSink
     @Override
     public CompletableFuture<Collection<Slice>> finish()
     {
-        return completedFuture(ImmutableList.of());
+        return completedFuture(ImmutableList.of(Slices.wrappedLongArray(pageSinkId.getId())));
     }
 
     @Override

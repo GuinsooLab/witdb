@@ -28,8 +28,8 @@ import io.trino.sql.DynamicFilters;
 import io.trino.sql.PlannerContext;
 import io.trino.sql.planner.plan.AggregationNode;
 import io.trino.sql.planner.plan.AssignUniqueId;
-import io.trino.sql.planner.plan.DeleteNode;
 import io.trino.sql.planner.plan.DistinctLimitNode;
+import io.trino.sql.planner.plan.DynamicFilterSourceNode;
 import io.trino.sql.planner.plan.EnforceSingleRowNode;
 import io.trino.sql.planner.plan.ExchangeNode;
 import io.trino.sql.planner.plan.ExplainAnalyzeNode;
@@ -39,6 +39,8 @@ import io.trino.sql.planner.plan.IndexJoinNode;
 import io.trino.sql.planner.plan.JoinNode;
 import io.trino.sql.planner.plan.LimitNode;
 import io.trino.sql.planner.plan.MarkDistinctNode;
+import io.trino.sql.planner.plan.MergeProcessorNode;
+import io.trino.sql.planner.plan.MergeWriterNode;
 import io.trino.sql.planner.plan.OutputNode;
 import io.trino.sql.planner.plan.PatternRecognitionNode;
 import io.trino.sql.planner.plan.PlanNode;
@@ -50,19 +52,20 @@ import io.trino.sql.planner.plan.RemoteSourceNode;
 import io.trino.sql.planner.plan.RowNumberNode;
 import io.trino.sql.planner.plan.SampleNode;
 import io.trino.sql.planner.plan.SemiJoinNode;
+import io.trino.sql.planner.plan.SimpleTableExecuteNode;
 import io.trino.sql.planner.plan.SortNode;
 import io.trino.sql.planner.plan.SpatialJoinNode;
 import io.trino.sql.planner.plan.StatisticsWriterNode;
 import io.trino.sql.planner.plan.TableDeleteNode;
 import io.trino.sql.planner.plan.TableExecuteNode;
 import io.trino.sql.planner.plan.TableFinishNode;
+import io.trino.sql.planner.plan.TableFunctionProcessorNode;
 import io.trino.sql.planner.plan.TableScanNode;
 import io.trino.sql.planner.plan.TableWriterNode;
 import io.trino.sql.planner.plan.TopNNode;
 import io.trino.sql.planner.plan.TopNRankingNode;
 import io.trino.sql.planner.plan.UnionNode;
 import io.trino.sql.planner.plan.UnnestNode;
-import io.trino.sql.planner.plan.UpdateNode;
 import io.trino.sql.planner.plan.ValuesNode;
 import io.trino.sql.planner.plan.WindowNode;
 import io.trino.sql.tree.Expression;
@@ -225,6 +228,12 @@ public class SplitSourceFactory
         }
 
         @Override
+        public Map<PlanNodeId, SplitSource> visitDynamicFilterSource(DynamicFilterSourceNode node, Void context)
+        {
+            return node.getSource().accept(this, context);
+        }
+
+        @Override
         public Map<PlanNodeId, SplitSource> visitRemoteSource(RemoteSourceNode node, Void context)
         {
             // remote source node does not have splits
@@ -241,8 +250,7 @@ public class SplitSourceFactory
         @Override
         public Map<PlanNodeId, SplitSource> visitFilter(FilterNode node, Void context)
         {
-            if (node.getSource() instanceof TableScanNode) {
-                TableScanNode scan = (TableScanNode) node.getSource();
+            if (node.getSource() instanceof TableScanNode scan) {
                 return visitScanAndFilter(scan, Optional.of(node));
             }
 
@@ -252,21 +260,20 @@ public class SplitSourceFactory
         @Override
         public Map<PlanNodeId, SplitSource> visitSample(SampleNode node, Void context)
         {
-            switch (node.getSampleType()) {
-                case BERNOULLI:
-                    return node.getSource().accept(this, context);
-                case SYSTEM:
+            return switch (node.getSampleType()) {
+                case BERNOULLI -> node.getSource().accept(this, context);
+                case SYSTEM -> {
                     Map<PlanNodeId, SplitSource> nodeSplits = node.getSource().accept(this, context);
                     // TODO: when this happens we should switch to either BERNOULLI or page sampling
                     if (nodeSplits.size() == 1) {
                         PlanNodeId planNodeId = getOnlyElement(nodeSplits.keySet());
                         SplitSource sampledSplitSource = new SampledSplitSource(nodeSplits.get(planNodeId), node.getSampleRatio());
-                        return ImmutableMap.of(planNodeId, sampledSplitSource);
+                        yield ImmutableMap.of(planNodeId, sampledSplitSource);
                     }
                     // table sampling on a sub query without splits is meaningless
-                    return nodeSplits;
-            }
-            throw new UnsupportedOperationException("Sampling is not supported for type " + node.getSampleType());
+                    yield nodeSplits;
+                }
+            };
         }
 
         @Override
@@ -297,6 +304,20 @@ public class SplitSourceFactory
         public Map<PlanNodeId, SplitSource> visitPatternRecognition(PatternRecognitionNode node, Void context)
         {
             return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Map<PlanNodeId, SplitSource> visitTableFunctionProcessor(TableFunctionProcessorNode node, Void context)
+        {
+            if (node.getSource().isEmpty()) {
+                // this is a source node, so produce splits
+                SplitSource splitSource = splitManager.getSplits(session, node.getHandle());
+                splitSources.add(splitSource);
+
+                return ImmutableMap.of(node.getId(), splitSource);
+            }
+
+            return node.getSource().orElseThrow().accept(this, context);
         }
 
         @Override
@@ -391,13 +412,13 @@ public class SplitSourceFactory
         }
 
         @Override
-        public Map<PlanNodeId, SplitSource> visitDelete(DeleteNode node, Void context)
+        public Map<PlanNodeId, SplitSource> visitMergeWriter(MergeWriterNode node, Void context)
         {
             return node.getSource().accept(this, context);
         }
 
         @Override
-        public Map<PlanNodeId, SplitSource> visitUpdate(UpdateNode node, Void context)
+        public Map<PlanNodeId, SplitSource> visitMergeProcessor(MergeProcessorNode node, Void context)
         {
             return node.getSource().accept(this, context);
         }
@@ -413,6 +434,13 @@ public class SplitSourceFactory
         public Map<PlanNodeId, SplitSource> visitTableExecute(TableExecuteNode node, Void context)
         {
             return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Map<PlanNodeId, SplitSource> visitSimpleTableExecuteNode(SimpleTableExecuteNode node, Void context)
+        {
+            // node does not have splits
+            return ImmutableMap.of();
         }
 
         @Override

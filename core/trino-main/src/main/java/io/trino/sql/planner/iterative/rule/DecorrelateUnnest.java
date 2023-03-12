@@ -20,7 +20,6 @@ import io.trino.Session;
 import io.trino.matching.Captures;
 import io.trino.matching.Pattern;
 import io.trino.metadata.Metadata;
-import io.trino.metadata.ResolvedFunction;
 import io.trino.sql.planner.PlanNodeIdAllocator;
 import io.trino.sql.planner.Symbol;
 import io.trino.sql.planner.SymbolAllocator;
@@ -31,6 +30,7 @@ import io.trino.sql.planner.optimizations.PlanNodeSearcher;
 import io.trino.sql.planner.plan.AssignUniqueId;
 import io.trino.sql.planner.plan.Assignments;
 import io.trino.sql.planner.plan.CorrelatedJoinNode;
+import io.trino.sql.planner.plan.DataOrganizationSpecification;
 import io.trino.sql.planner.plan.EnforceSingleRowNode;
 import io.trino.sql.planner.plan.FilterNode;
 import io.trino.sql.planner.plan.JoinNode.Type;
@@ -42,28 +42,25 @@ import io.trino.sql.planner.plan.RowNumberNode;
 import io.trino.sql.planner.plan.TopNNode;
 import io.trino.sql.planner.plan.UnnestNode;
 import io.trino.sql.planner.plan.WindowNode;
-import io.trino.sql.planner.plan.WindowNode.Specification;
 import io.trino.sql.tree.Cast;
 import io.trino.sql.tree.ComparisonExpression;
 import io.trino.sql.tree.Expression;
-import io.trino.sql.tree.FunctionCall;
 import io.trino.sql.tree.GenericLiteral;
 import io.trino.sql.tree.IfExpression;
 import io.trino.sql.tree.IsNullPredicate;
 import io.trino.sql.tree.NullLiteral;
 import io.trino.sql.tree.QualifiedName;
-import io.trino.sql.tree.StringLiteral;
 
 import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.matching.Pattern.nonEmpty;
+import static io.trino.spi.StandardErrorCode.SUBQUERY_MULTIPLE_ROWS;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
-import static io.trino.spi.type.VarcharType.VARCHAR;
-import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.analyzer.TypeSignatureTranslator.toSqlType;
+import static io.trino.sql.planner.LogicalPlanner.failFunction;
 import static io.trino.sql.planner.iterative.rule.ImplementLimitWithTies.rewriteLimitWithTiesWithPartitioning;
 import static io.trino.sql.planner.iterative.rule.Util.restrictOutputs;
 import static io.trino.sql.planner.optimizations.QueryCardinalityUtil.isScalar;
@@ -210,8 +207,7 @@ public class DecorrelateUnnest
         // Here, any underlying projection that was a source of the correlated UnnestNode, is appended as a source of the rewritten UnnestNode.
         // If the projection is not necessary for UnnestNode (i.e. it does not produce any unnest symbols), it should be pruned afterwards.
         PlanNode unnestSource = context.getLookup().resolve(unnestNode.getSource());
-        if (unnestSource instanceof ProjectNode) {
-            ProjectNode sourceProjection = (ProjectNode) unnestSource;
+        if (unnestSource instanceof ProjectNode sourceProjection) {
             input = new ProjectNode(
                     sourceProjection.getId(),
                     input,
@@ -292,11 +288,10 @@ public class DecorrelateUnnest
      */
     private static boolean isSupportedUnnest(PlanNode node, List<Symbol> correlation, Lookup lookup)
     {
-        if (!(node instanceof UnnestNode)) {
+        if (!(node instanceof UnnestNode unnestNode)) {
             return false;
         }
 
-        UnnestNode unnestNode = (UnnestNode) node;
         List<Symbol> unnestSymbols = unnestNode.getMappings().stream()
                 .map(UnnestNode.Mapping::getInput)
                 .collect(toImmutableList());
@@ -410,16 +405,13 @@ public class DecorrelateUnnest
                         Optional.of(2),
                         Optional.empty());
             }
-            ResolvedFunction fail = metadata.resolveFunction(session, QualifiedName.of("fail"), fromTypes(VARCHAR));
             Expression predicate = new IfExpression(
                     new ComparisonExpression(
                             GREATER_THAN,
                             rowNumberSymbol.toSymbolReference(),
                             new GenericLiteral("BIGINT", "1")),
                     new Cast(
-                            new FunctionCall(
-                                    fail.toQualifiedName(),
-                                    ImmutableList.of(new Cast(new StringLiteral("Scalar sub-query has returned multiple rows"), toSqlType(VARCHAR)))),
+                            failFunction(metadata, session, SUBQUERY_MULTIPLE_ROWS, "Scalar sub-query has returned multiple rows"),
                             toSqlType(BOOLEAN)),
                     TRUE_LITERAL);
 
@@ -479,7 +471,7 @@ public class DecorrelateUnnest
             WindowNode windowNode = new WindowNode(
                     idAllocator.getNextId(),
                     source.getPlan(),
-                    new Specification(ImmutableList.of(uniqueSymbol), Optional.of(node.getOrderingScheme())),
+                    new DataOrganizationSpecification(ImmutableList.of(uniqueSymbol), Optional.of(node.getOrderingScheme())),
                     ImmutableMap.of(rowNumberSymbol, rowNumberFunction),
                     Optional.empty(),
                     ImmutableSet.of(),

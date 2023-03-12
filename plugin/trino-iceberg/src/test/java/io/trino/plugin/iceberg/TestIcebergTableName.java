@@ -20,28 +20,64 @@ import java.util.Optional;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.testing.assertions.TrinoExceptionAssert.assertTrinoExceptionThrownBy;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertTrue;
 
 public class TestIcebergTableName
 {
     @Test
     public void testFrom()
     {
-        assertFrom("abc", "abc", TableType.DATA, Optional.empty());
-        assertFrom("abc@123", "abc", TableType.DATA, Optional.of(123L));
-        assertFrom("abc$data", "abc", TableType.DATA, Optional.empty());
-        assertFrom("xyz@456", "xyz", TableType.DATA, Optional.of(456L));
-        assertFrom("xyz$data@456", "xyz", TableType.DATA, Optional.of(456L));
-        assertFrom("abc$partitions@456", "abc", TableType.PARTITIONS, Optional.of(456L));
-        assertFrom("abc$manifests@456", "abc", TableType.MANIFESTS, Optional.of(456L));
-        assertFrom("abc$manifests@456", "abc", TableType.MANIFESTS, Optional.of(456L));
-        assertFrom("abc$history", "abc", TableType.HISTORY, Optional.empty());
-        assertFrom("abc$snapshots", "abc", TableType.SNAPSHOTS, Optional.empty());
+        assertFrom("abc", "abc", TableType.DATA);
+        assertFrom("abc$data", "abc", TableType.DATA);
+        assertFrom("abc$history", "abc", TableType.HISTORY);
+        assertFrom("abc$snapshots", "abc", TableType.SNAPSHOTS);
 
+        assertInvalid("abc@123", "Invalid Iceberg table name: abc@123");
         assertInvalid("abc@xyz", "Invalid Iceberg table name: abc@xyz");
         assertInvalid("abc$what", "Invalid Iceberg table name (unknown type 'what'): abc$what");
-        assertInvalid("abc@123$data@456", "Invalid Iceberg table name (cannot specify two @ versions): abc@123$data@456");
-        assertInvalid("abc@123$snapshots", "Invalid Iceberg table name (cannot use @ version with table type 'SNAPSHOTS'): abc@123$snapshots");
-        assertInvalid("abc$snapshots@456", "Invalid Iceberg table name (cannot use @ version with table type 'SNAPSHOTS'): abc$snapshots@456");
+        assertInvalid("abc@123$data@456", "Invalid Iceberg table name: abc@123$data@456");
+        assertInvalid("abc@123$snapshots", "Invalid Iceberg table name: abc@123$snapshots");
+        assertInvalid("abc$snapshots@456", "Invalid Iceberg table name: abc$snapshots@456");
+        assertInvalid("xyz$data@456", "Invalid Iceberg table name: xyz$data@456");
+        assertInvalid("abc$partitions@456", "Invalid Iceberg table name: abc$partitions@456");
+        assertInvalid("abc$manifests@456", "Invalid Iceberg table name: abc$manifests@456");
+    }
+
+    @Test
+    public void testIsDataTable()
+    {
+        assertTrue(IcebergTableName.isDataTable("abc"));
+        assertTrue(IcebergTableName.isDataTable("abc$data"));
+
+        assertFalse(IcebergTableName.isDataTable("abc$history"));
+        assertFalse(IcebergTableName.isDataTable("abc$invalid"));
+    }
+
+    @Test
+    public void testTableNameFrom()
+    {
+        assertEquals(IcebergTableName.tableNameFrom("abc"), "abc");
+        assertEquals(IcebergTableName.tableNameFrom("abc$data"), "abc");
+        assertEquals(IcebergTableName.tableNameFrom("abc$history"), "abc");
+        assertEquals(IcebergTableName.tableNameFrom("abc$invalid"), "abc");
+    }
+
+    @Test
+    public void testTableTypeFrom()
+    {
+        assertEquals(IcebergTableName.tableTypeFrom("abc"), Optional.of(TableType.DATA));
+        assertEquals(IcebergTableName.tableTypeFrom("abc$data"), Optional.of(TableType.DATA));
+        assertEquals(IcebergTableName.tableTypeFrom("abc$history"), Optional.of(TableType.HISTORY));
+
+        assertEquals(IcebergTableName.tableTypeFrom("abc$invalid"), Optional.empty());
+    }
+
+    @Test
+    public void testGetTableNameWithType()
+    {
+        assertEquals(new IcebergTableName("abc", TableType.DATA).getTableNameWithType(), "abc$data");
+        assertEquals(new IcebergTableName("abc", TableType.HISTORY).getTableNameWithType(), "abc$history");
     }
 
     private static void assertInvalid(String inputName, String message)
@@ -51,11 +87,10 @@ public class TestIcebergTableName
                 .hasMessage(message);
     }
 
-    private static void assertFrom(String inputName, String tableName, TableType tableType, Optional<Long> snapshotId)
+    private static void assertFrom(String inputName, String tableName, TableType tableType)
     {
         IcebergTableName name = IcebergTableName.from(inputName);
         assertEquals(name.getTableName(), tableName);
         assertEquals(name.getTableType(), tableType);
-        assertEquals(name.getSnapshotId(), snapshotId);
     }
 }

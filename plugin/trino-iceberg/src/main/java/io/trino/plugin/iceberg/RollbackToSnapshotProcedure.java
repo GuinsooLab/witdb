@@ -26,31 +26,32 @@ import javax.inject.Provider;
 
 import java.lang.invoke.MethodHandle;
 
-import static io.trino.spi.block.MethodHandleUtil.methodHandle;
+import static io.trino.plugin.base.util.Procedures.checkProcedureArgument;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
+import static java.lang.invoke.MethodHandles.lookup;
 import static java.util.Objects.requireNonNull;
 
 public class RollbackToSnapshotProcedure
         implements Provider<Procedure>
 {
-    private static final MethodHandle ROLLBACK_TO_SNAPSHOT = methodHandle(
-            RollbackToSnapshotProcedure.class,
-            "rollbackToSnapshot",
-            ConnectorSession.class,
-            String.class,
-            String.class,
-            Long.class);
+    private static final MethodHandle ROLLBACK_TO_SNAPSHOT;
+
+    static {
+        try {
+            ROLLBACK_TO_SNAPSHOT = lookup().unreflect(RollbackToSnapshotProcedure.class.getMethod("rollbackToSnapshot", ConnectorSession.class, String.class, String.class, Long.class));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
 
     private final TrinoCatalogFactory catalogFactory;
-    private final ClassLoader classLoader;
 
     @Inject
     public RollbackToSnapshotProcedure(TrinoCatalogFactory catalogFactory)
     {
         this.catalogFactory = requireNonNull(catalogFactory, "catalogFactory is null");
-        // this class is loaded by PluginClassLoader and we need its reference to be stored
-        this.classLoader = getClass().getClassLoader();
     }
 
     @Override
@@ -68,10 +69,11 @@ public class RollbackToSnapshotProcedure
 
     public void rollbackToSnapshot(ConnectorSession clientSession, String schema, String table, Long snapshotId)
     {
-        // this line guarantees that classLoader that we stored in the field will be used inside try/catch
-        // as we captured reference to PluginClassLoader during initialization of this class
-        // we can use it now to correctly execute the procedure
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
+        checkProcedureArgument(schema != null, "schema cannot be null");
+        checkProcedureArgument(table != null, "table cannot be null");
+        checkProcedureArgument(snapshotId != null, "snapshot_id cannot be null");
+
+        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(getClass().getClassLoader())) {
             SchemaTableName schemaTableName = new SchemaTableName(schema, table);
             Table icebergTable = catalogFactory.create(clientSession.getIdentity()).loadTable(clientSession, schemaTableName);
             icebergTable.manageSnapshots().setCurrentSnapshot(snapshotId).commit();

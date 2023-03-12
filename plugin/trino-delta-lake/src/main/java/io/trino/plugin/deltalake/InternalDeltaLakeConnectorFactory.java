@@ -22,6 +22,9 @@ import io.airlift.bootstrap.Bootstrap;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.airlift.event.client.EventModule;
 import io.airlift.json.JsonModule;
+import io.trino.filesystem.hdfs.HdfsFileSystemModule;
+import io.trino.hdfs.HdfsModule;
+import io.trino.hdfs.authentication.HdfsAuthenticationModule;
 import io.trino.plugin.base.CatalogName;
 import io.trino.plugin.base.CatalogNameModule;
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorAccessControl;
@@ -34,9 +37,7 @@ import io.trino.plugin.base.jmx.ConnectorObjectNameGeneratorModule;
 import io.trino.plugin.base.jmx.MBeanServerModule;
 import io.trino.plugin.base.session.SessionPropertiesProvider;
 import io.trino.plugin.deltalake.metastore.DeltaLakeMetastoreModule;
-import io.trino.plugin.hive.HiveHdfsModule;
 import io.trino.plugin.hive.NodeVersion;
-import io.trino.plugin.hive.authentication.HdfsAuthenticationModule;
 import io.trino.plugin.hive.azure.HiveAzureModule;
 import io.trino.plugin.hive.gcs.HiveGcsModule;
 import io.trino.plugin.hive.s3.HiveS3Module;
@@ -71,6 +72,7 @@ public final class InternalDeltaLakeConnectorFactory
             String catalogName,
             Map<String, String> config,
             ConnectorContext context,
+            Optional<Module> metastoreModule,
             Module module)
     {
         ClassLoader classLoader = InternalDeltaLakeConnectorFactory.class.getClassLoader();
@@ -78,17 +80,22 @@ public final class InternalDeltaLakeConnectorFactory
             Bootstrap app = new Bootstrap(
                     new EventModule(),
                     new MBeanModule(),
-                    new ConnectorObjectNameGeneratorModule(catalogName, "io.trino.plugin.deltalake", "trino.plugin.deltalake"),
+                    new ConnectorObjectNameGeneratorModule("io.trino.plugin.deltalake", "trino.plugin.deltalake"),
                     new JsonModule(),
                     new MBeanServerModule(),
-                    new HiveHdfsModule(),
+                    new HdfsModule(),
                     new HiveS3Module(),
+                    new DeltaLakeS3Module(),
                     new HiveAzureModule(),
+                    new DeltaLakeAzureModule(),
                     new HiveGcsModule(),
+                    new DeltaLakeGcsModule(),
                     new HdfsAuthenticationModule(),
+                    new HdfsFileSystemModule(),
                     new CatalogNameModule(catalogName),
-                    new DeltaLakeMetastoreModule(),
+                    metastoreModule.orElse(new DeltaLakeMetastoreModule()),
                     new DeltaLakeModule(),
+                    new DeltaLakeSecurityModule(),
                     binder -> {
                         binder.bind(NodeVersion.class).toInstance(new NodeVersion(context.getNodeManager().getCurrentNode().getVersion()));
                         binder.bind(NodeManager.class).toInstance(context.getNodeManager());

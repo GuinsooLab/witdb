@@ -18,9 +18,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.trino.execution.buffer.OutputBufferStatus;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -55,8 +57,10 @@ public class TaskStatus
     private final long queuedPartitionedSplitsWeight;
     private final int runningPartitionedDrivers;
     private final long runningPartitionedSplitsWeight;
-    private final boolean outputBufferOverutilized;
+    private final OutputBufferStatus outputBufferStatus;
+    private final DataSize outputDataSize;
     private final DataSize physicalWrittenDataSize;
+    private final Optional<Integer> maxWriterCount;
     private final DataSize memoryReservation;
     private final DataSize peakMemoryReservation;
     private final DataSize revocableMemoryReservation;
@@ -79,8 +83,10 @@ public class TaskStatus
             @JsonProperty("failures") List<ExecutionFailureInfo> failures,
             @JsonProperty("queuedPartitionedDrivers") int queuedPartitionedDrivers,
             @JsonProperty("runningPartitionedDrivers") int runningPartitionedDrivers,
-            @JsonProperty("outputBufferOverutilized") boolean outputBufferOverutilized,
+            @JsonProperty("outputBufferStatus") OutputBufferStatus outputBufferStatus,
+            @JsonProperty("outputDataSize") DataSize outputDataSize,
             @JsonProperty("physicalWrittenDataSize") DataSize physicalWrittenDataSize,
+            @JsonProperty("writerCount") Optional<Integer> maxWriterCount,
             @JsonProperty("memoryReservation") DataSize memoryReservation,
             @JsonProperty("peakMemoryReservation") DataSize peakMemoryReservation,
             @JsonProperty("revocableMemoryReservation") DataSize revocableMemoryReservation,
@@ -109,9 +115,11 @@ public class TaskStatus
         checkArgument(runningPartitionedSplitsWeight >= 0, "runningPartitionedSplitsWeight must be positive");
         this.runningPartitionedSplitsWeight = runningPartitionedSplitsWeight;
 
-        this.outputBufferOverutilized = outputBufferOverutilized;
+        this.outputBufferStatus = requireNonNull(outputBufferStatus, "outputBufferStatus is null");
+        this.outputDataSize = requireNonNull(outputDataSize, "outputDataSize is null");
 
         this.physicalWrittenDataSize = requireNonNull(physicalWrittenDataSize, "physicalWrittenDataSize is null");
+        this.maxWriterCount = requireNonNull(maxWriterCount, "maxWriterCount is null");
 
         this.memoryReservation = requireNonNull(memoryReservation, "memoryReservation is null");
         this.peakMemoryReservation = requireNonNull(peakMemoryReservation, "peakMemoryReservation is null");
@@ -186,9 +194,21 @@ public class TaskStatus
     }
 
     @JsonProperty
-    public boolean isOutputBufferOverutilized()
+    public Optional<Integer> getMaxWriterCount()
     {
-        return outputBufferOverutilized;
+        return maxWriterCount;
+    }
+
+    @JsonProperty
+    public OutputBufferStatus getOutputBufferStatus()
+    {
+        return outputBufferStatus;
+    }
+
+    @JsonProperty
+    public DataSize getOutputDataSize()
+    {
+        return outputDataSize;
     }
 
     @JsonProperty
@@ -260,8 +280,10 @@ public class TaskStatus
                 ImmutableList.of(),
                 0,
                 0,
-                false,
+                OutputBufferStatus.initial(),
                 DataSize.ofBytes(0),
+                DataSize.ofBytes(0),
+                Optional.empty(),
                 DataSize.ofBytes(0),
                 DataSize.ofBytes(0),
                 DataSize.ofBytes(0),
@@ -284,8 +306,10 @@ public class TaskStatus
                 exceptions,
                 taskStatus.getQueuedPartitionedDrivers(),
                 taskStatus.getRunningPartitionedDrivers(),
-                taskStatus.isOutputBufferOverutilized(),
+                taskStatus.getOutputBufferStatus(),
+                taskStatus.getOutputDataSize(),
                 taskStatus.getPhysicalWrittenDataSize(),
+                taskStatus.getMaxWriterCount(),
                 taskStatus.getMemoryReservation(),
                 taskStatus.getPeakMemoryReservation(),
                 taskStatus.getRevocableMemoryReservation(),

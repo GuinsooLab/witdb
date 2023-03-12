@@ -65,7 +65,6 @@ public class SqlParser
             .specialRule(SqlBaseParser.RULE_query, "<query>")
             .specialRule(SqlBaseParser.RULE_type, "<type>")
             .specialToken(SqlBaseLexer.INTEGER_VALUE, "<integer>")
-            .ignoredRule(SqlBaseParser.RULE_nonReserved)
             .build();
 
     private final BiConsumer<SqlBaseLexer, SqlBaseParser> initializer;
@@ -124,9 +123,7 @@ public class SqlParser
                     if (nextTokensContext == null) {
                         throw new InputMismatchException(recognizer);
                     }
-                    else {
-                        throw new InputMismatchException(recognizer, nextTokensState, nextTokensContext);
-                    }
+                    throw new InputMismatchException(recognizer, nextTokensState, nextTokensContext);
                 }
             });
 

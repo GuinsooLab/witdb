@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.trino</groupId>
         <artifactId>trino-root</artifactId>
-        <version>391-SNAPSHOT</version>
+        <version>411-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -18,6 +18,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-testing-services</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>io.airlift</groupId>
             <artifactId>log</artifactId>
         </dependency>
@@ -25,12 +30,16 @@
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-api</artifactId>
-            <version>${dep.docker-java.version}</version>
         </dependency>
 
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>dev.failsafe</groupId>
+            <artifactId>failsafe</artifactId>
         </dependency>
 
         <dependency>
@@ -49,8 +58,8 @@
         </dependency>
 
         <dependency>
-            <groupId>net.jodah</groupId>
-            <artifactId>failsafe</artifactId>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
         </dependency>
 
         <dependency>

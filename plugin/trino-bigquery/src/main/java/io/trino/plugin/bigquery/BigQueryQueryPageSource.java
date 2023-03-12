@@ -47,11 +47,11 @@ import java.util.Optional;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
 import static io.airlift.slice.Slices.utf8Slice;
+import static io.trino.plugin.bigquery.BigQueryClient.selectSql;
 import static io.trino.plugin.bigquery.BigQueryType.toTrinoTimestamp;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.DateType.DATE;
-import static io.trino.spi.type.Decimals.isLongDecimal;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.TimeType.TIME_MICROS;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MICROS;
@@ -96,8 +96,20 @@ public class BigQueryQueryPageSource
         checkArgument(columnNames.size() == columnTypes.size(), "columnNames and columnTypes sizes don't match");
         this.columnTypes = ImmutableList.copyOf(columnTypes);
         this.pageBuilder = new PageBuilder(columnTypes);
-        TableId tableId = TableId.of(client.getProjectId(), table.getRemoteTableName().getDatasetName(), table.getRemoteTableName().getTableName());
-        this.tableResult = client.query(tableId, ImmutableList.copyOf(columnNames), filter, useQueryResultsCache, createDisposition);
+        String sql = buildSql(table, client.getProjectId(), ImmutableList.copyOf(columnNames), filter);
+        this.tableResult = client.query(sql, useQueryResultsCache, createDisposition);
+    }
+
+    private static String buildSql(BigQueryTableHandle table, String projectId, List<String> columnNames, Optional<String> filter)
+    {
+        if (table.getRelationHandle() instanceof BigQueryQueryRelationHandle queryRelationHandle) {
+            if (filter.isEmpty()) {
+                return queryRelationHandle.getQuery();
+            }
+            return "SELECT * FROM (" + queryRelationHandle.getQuery() + " ) WHERE " + filter.get();
+        }
+        TableId tableId = TableId.of(projectId, table.asPlainTable().getRemoteTableName().getDatasetName(), table.asPlainTable().getRemoteTableName().getTableName());
+        return selectSql(tableId, ImmutableList.copyOf(columnNames), filter);
     }
 
     @Override
@@ -187,8 +199,8 @@ public class BigQueryQueryPageSource
                 type.writeDouble(output, value.getDoubleValue());
             }
             else if (type.getJavaType() == Int128.class) {
-                verify(isLongDecimal(type), "The type should be long decimal");
                 DecimalType decimalType = (DecimalType) type;
+                verify(!decimalType.isShort(), "The type should be long decimal");
                 BigDecimal decimal = value.getNumericValue();
                 type.writeObject(output, Decimals.encodeScaledValue(decimal, decimalType.getScale()));
             }

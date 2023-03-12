@@ -25,12 +25,14 @@ import org.testng.annotations.Test;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Properties;
 
 import static io.trino.plugin.jdbc.H2QueryRunner.createH2QueryRunner;
 import static io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties.UNSUPPORTED_TYPE_HANDLING;
 import static io.trino.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR;
 import static io.trino.plugin.jdbc.UnsupportedTypeHandling.IGNORE;
+import static io.trino.spi.connector.ConnectorMetadata.MODIFYING_ROWS_MESSAGE;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,6 +56,7 @@ public class TestJdbcConnectorTest
         return createH2QueryRunner(REQUIRED_TPCH_TABLES, properties);
     }
 
+    @SuppressWarnings("DuplicateBranchesInSwitch")
     @Override
     protected boolean hasBehavior(TestingConnectorBehavior connectorBehavior)
     {
@@ -63,14 +66,16 @@ public class TestJdbcConnectorTest
             case SUPPORTS_AGGREGATION_PUSHDOWN:
                 return false;
 
+            case SUPPORTS_CREATE_TABLE_WITH_TABLE_COMMENT:
+            case SUPPORTS_CREATE_TABLE_WITH_COLUMN_COMMENT:
             case SUPPORTS_RENAME_TABLE_ACROSS_SCHEMAS:
                 return false;
 
-            case SUPPORTS_CREATE_TABLE_WITH_TABLE_COMMENT:
-            case SUPPORTS_CREATE_TABLE_WITH_COLUMN_COMMENT:
+            case SUPPORTS_ADD_COLUMN_WITH_COMMENT:
+                return false;
+
             case SUPPORTS_COMMENT_ON_TABLE:
             case SUPPORTS_COMMENT_ON_COLUMN:
-            case SUPPORTS_ADD_COLUMN_WITH_COMMENT:
                 return false;
 
             case SUPPORTS_ARRAY:
@@ -132,7 +137,7 @@ public class TestJdbcConnectorTest
     public void testDeleteWithLike()
     {
         assertThatThrownBy(super::testDeleteWithLike)
-                .hasStackTraceContaining("TrinoException: Unsupported delete");
+                .hasStackTraceContaining("TrinoException: " + MODIFYING_ROWS_MESSAGE);
     }
 
     @Test
@@ -258,10 +263,22 @@ public class TestJdbcConnectorTest
     }
 
     @Override
+    protected void verifyAddNotNullColumnToNonEmptyTableFailurePermissible(Throwable e)
+    {
+        assertThat(e).hasMessageContaining("NULL not allowed for column");
+    }
+
+    @Override
     public void testAddColumnConcurrently()
     {
         // TODO: Difficult to determine whether the exception is concurrent issue or not from the error message
         throw new SkipException("TODO: Enable this test after finding the failure cause");
+    }
+
+    @Override
+    protected void verifySetColumnTypeFailurePermissible(Throwable e)
+    {
+        assertThat(e).hasMessageMatching("(?s).*(Data conversion error converting|value out of range).*");
     }
 
     @Override
@@ -275,5 +292,41 @@ public class TestJdbcConnectorTest
         return Session.builder(getSession())
                 .setCatalogSessionProperty("jdbc", UNSUPPORTED_TYPE_HANDLING, unsupportedTypeHandling.name())
                 .build();
+    }
+
+    @Override
+    protected void verifyColumnNameLengthFailurePermissible(Throwable e)
+    {
+        assertThat(e).hasMessageMatching("(?s)(.*The name that starts with .* is too long\\..*)");
+    }
+
+    @Override
+    protected void verifySchemaNameLengthFailurePermissible(Throwable e)
+    {
+        assertThat(e).hasMessageMatching("(?s)(.*The name that starts with .* is too long\\..*)");
+    }
+
+    @Override
+    protected void verifyTableNameLengthFailurePermissible(Throwable e)
+    {
+        assertThat(e).hasMessageMatching("(?s)(.*The name that starts with .* is too long\\..*)");
+    }
+
+    @Override
+    protected OptionalInt maxColumnNameLength()
+    {
+        return OptionalInt.of(256);
+    }
+
+    @Override
+    protected OptionalInt maxSchemaNameLength()
+    {
+        return OptionalInt.of(256);
+    }
+
+    @Override
+    protected OptionalInt maxTableNameLength()
+    {
+        return OptionalInt.of(256);
     }
 }

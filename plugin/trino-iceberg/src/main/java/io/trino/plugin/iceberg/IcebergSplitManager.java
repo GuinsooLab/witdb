@@ -15,6 +15,7 @@ package io.trino.plugin.iceberg;
 
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.Duration;
+import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorSplitSource;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitManager;
@@ -41,12 +42,14 @@ public class IcebergSplitManager
 
     private final IcebergTransactionManager transactionManager;
     private final TypeManager typeManager;
+    private final TrinoFileSystemFactory fileSystemFactory;
 
     @Inject
-    public IcebergSplitManager(IcebergTransactionManager transactionManager, TypeManager typeManager)
+    public IcebergSplitManager(IcebergTransactionManager transactionManager, TypeManager typeManager, TrinoFileSystemFactory fileSystemFactory)
     {
         this.transactionManager = requireNonNull(transactionManager, "transactionManager is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
     }
 
     @Override
@@ -72,6 +75,8 @@ public class IcebergSplitManager
         TableScan tableScan = icebergTable.newScan()
                 .useSnapshot(table.getSnapshotId().get());
         IcebergSplitSource splitSource = new IcebergSplitSource(
+                fileSystemFactory,
+                session,
                 table,
                 tableScan,
                 table.getMaxScannedFileSize(),

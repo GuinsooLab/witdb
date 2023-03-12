@@ -21,7 +21,6 @@ import java.util.OptionalInt;
 import java.util.function.ObjLongConsumer;
 
 import static io.trino.spi.block.BlockUtil.checkArrayRange;
-import static io.trino.spi.block.DictionaryId.randomDictionaryId;
 
 public interface Block
 {
@@ -194,6 +193,7 @@ public interface Block
      * and not dependent on any particular specific position. This allows for some complex block wrappings
      * to potentially avoid having to call {@link Block#getPositionsSizeInBytes(boolean[], int)}  which
      * would require computing the specific positions selected
+     *
      * @return The size in bytes, per position, if this block type does not require specific position information to compute its size
      */
     OptionalInt fixedSizeInBytesPerPosition();
@@ -244,7 +244,7 @@ public interface Block
     {
         checkArrayRange(positions, offset, length);
 
-        return new DictionaryBlock(offset, length, this, positions, false, randomDictionaryId());
+        return new DictionaryBlock(offset, length, this, positions);
     }
 
     /**

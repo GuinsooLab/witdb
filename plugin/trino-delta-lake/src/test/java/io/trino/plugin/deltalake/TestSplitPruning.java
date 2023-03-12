@@ -14,13 +14,13 @@
 package io.trino.plugin.deltalake;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Resources;
 import io.trino.execution.QueryStats;
 import io.trino.operator.OperatorStats;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
-import io.trino.testing.ResultWithQueryId;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -58,7 +58,7 @@ public class TestSplitPruning
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        return createDeltaLakeQueryRunner(DELTA_CATALOG);
+        return createDeltaLakeQueryRunner(DELTA_CATALOG, ImmutableMap.of(), ImmutableMap.of("delta.register-table-procedure.enabled", "true"));
     }
 
     @BeforeClass
@@ -67,7 +67,7 @@ public class TestSplitPruning
         for (String table : TABLES) {
             String dataPath = Resources.getResource("databricks/pruning/" + table).toExternalForm();
             getQueryRunner().execute(
-                    format("CREATE TABLE %s (part_key double, name varchar, val double) WITH (location = '%s')", table, dataPath));
+                    format("CALL system.register_table('%s', '%s', '%s')", getSession().getSchema().orElseThrow(), table, dataPath));
         }
     }
 
@@ -135,10 +135,10 @@ public class TestSplitPruning
                 Set.of(),
                 0);
 
-        ResultWithQueryId<MaterializedResult> result = getDistributedQueryRunner().executeWithQueryId(
+        MaterializedResult result = getDistributedQueryRunner().execute(
                 getSession(),
                 format("SELECT name FROM %s WHERE val IS NOT NULL", tableName));
-        assertEquals(result.getResult().getOnlyColumnAsSet(), Set.of("a5", "b5", "a6", "b6"));
+        assertEquals(result.getOnlyColumnAsSet(), Set.of("a5", "b5", "a6", "b6"));
     }
 
     @Test
@@ -275,7 +275,7 @@ public class TestSplitPruning
         // log entry with invalid stats (low > high)
         String dataPath = Resources.getResource("databricks/pruning/invalid_log").toExternalForm();
         getQueryRunner().execute(
-                format("CREATE TABLE person (part_key double, name VARCHAR, val double) WITH (location = '%s')", dataPath));
+                format("CALL system.register_table('%s', 'person', '%s')", getSession().getSchema().orElseThrow(), dataPath));
         assertQueryFails("SELECT name FROM person WHERE income < 1000", "Failed to generate splits for tpch.person");
     }
 

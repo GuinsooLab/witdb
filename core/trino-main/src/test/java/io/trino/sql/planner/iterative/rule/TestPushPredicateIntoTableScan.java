@@ -17,7 +17,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.Slices;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.connector.MockConnectorColumnHandle;
 import io.trino.connector.MockConnectorFactory;
 import io.trino.connector.MockConnectorTableHandle;
@@ -26,6 +25,7 @@ import io.trino.metadata.TestingFunctionResolution;
 import io.trino.plugin.tpch.TpchColumnHandle;
 import io.trino.plugin.tpch.TpchTableHandle;
 import io.trino.plugin.tpch.TpchTransactionHandle;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorPartitioningHandle;
 import io.trino.spi.connector.ConnectorTableHandle;
@@ -85,12 +85,11 @@ public class TestPushPredicateIntoTableScan
             new MockConnectorTableHandle(new SchemaTableName("schema", "partitioned_to_unpartitioned"));
     private static final ConnectorTableHandle CONNECTOR_UNPARTITIONED_TABLE_HANDLE =
             new MockConnectorTableHandle(new SchemaTableName("schema", "unpartitioned"));
-    private static final TableHandle PARTITIONED_TABLE_HANDLE = tableHandle(CONNECTOR_PARTITIONED_TABLE_HANDLE);
-    private static final TableHandle PARTITIONED_TABLE_HANDLE_TO_UNPARTITIONED = tableHandle(CONNECTOR_PARTITIONED_TABLE_HANDLE_TO_UNPARTITIONED);
     private static final ConnectorPartitioningHandle PARTITIONING_HANDLE = new ConnectorPartitioningHandle() {};
     private static final ColumnHandle MOCK_COLUMN_HANDLE = new MockConnectorColumnHandle("col", VARCHAR);
 
     private PushPredicateIntoTableScan pushPredicateIntoTableScan;
+    private CatalogHandle mockCatalogHandle;
     private TableHandle nationTableHandle;
     private TableHandle ordersTableHandle;
     private final TestingFunctionResolution functionResolution = new TestingFunctionResolution();
@@ -98,20 +97,21 @@ public class TestPushPredicateIntoTableScan
     @BeforeClass
     public void setUpBeforeClass()
     {
-        pushPredicateIntoTableScan = new PushPredicateIntoTableScan(tester().getPlannerContext(), createTestingTypeAnalyzer(tester().getPlannerContext()));
+        pushPredicateIntoTableScan = new PushPredicateIntoTableScan(tester().getPlannerContext(), createTestingTypeAnalyzer(tester().getPlannerContext()), false);
 
-        CatalogName catalogName = tester().getCurrentConnectorId();
+        CatalogHandle catalogHandle = tester().getCurrentCatalogHandle();
         tester().getQueryRunner().createCatalog(MOCK_CATALOG, createMockFactory(), ImmutableMap.of());
+        mockCatalogHandle = tester().getQueryRunner().getCatalogHandle(MOCK_CATALOG);
 
         TpchTableHandle nation = new TpchTableHandle("sf1", "nation", 1.0);
         nationTableHandle = new TableHandle(
-                catalogName,
+                catalogHandle,
                 nation,
                 TpchTransactionHandle.INSTANCE);
 
         TpchTableHandle orders = new TpchTableHandle("sf1", "orders", 1.0);
         ordersTableHandle = new TableHandle(
-                catalogName,
+                catalogHandle,
                 orders,
                 TpchTransactionHandle.INSTANCE);
     }
@@ -192,9 +192,7 @@ public class TestPushPredicateIntoTableScan
     {
         Type orderStatusType = createVarcharType(1);
         ColumnHandle columnHandle = new TpchColumnHandle("orderstatus", orderStatusType);
-        Map<String, Domain> filterConstraint = ImmutableMap.<String, Domain>builder()
-                .put("orderstatus", singleValue(orderStatusType, utf8Slice("O")))
-                .buildOrThrow();
+        Map<String, Domain> filterConstraint = ImmutableMap.of("orderstatus", singleValue(orderStatusType, utf8Slice("O")));
         tester().assertThat(pushPredicateIntoTableScan)
                 .on(p -> p.filter(expression("orderstatus = 'O' OR orderstatus = 'F'"),
                         p.tableScan(
@@ -305,9 +303,7 @@ public class TestPushPredicateIntoTableScan
     @Test
     public void ruleAddedTableLayoutToFilterTableScan()
     {
-        Map<String, Domain> filterConstraint = ImmutableMap.<String, Domain>builder()
-                .put("orderstatus", singleValue(createVarcharType(1), utf8Slice("F")))
-                .buildOrThrow();
+        Map<String, Domain> filterConstraint = ImmutableMap.of("orderstatus", singleValue(createVarcharType(1), utf8Slice("F")));
         tester().assertThat(pushPredicateIntoTableScan)
                 .on(p -> p.filter(expression("orderstatus = 'F'"),
                         p.tableScan(
@@ -361,9 +357,9 @@ public class TestPushPredicateIntoTableScan
                 .build();
         assertThatThrownBy(() -> tester().assertThat(pushPredicateIntoTableScan)
                 .withSession(session)
-                .on(p -> p.filter(expression("col = 'G'"),
+                .on(p -> p.filter(expression("col = VARCHAR 'G'"),
                         p.tableScan(
-                                PARTITIONED_TABLE_HANDLE_TO_UNPARTITIONED,
+                                mockTableHandle(CONNECTOR_PARTITIONED_TABLE_HANDLE_TO_UNPARTITIONED),
                                 ImmutableList.of(p.symbol("col", VARCHAR)),
                                 ImmutableMap.of(p.symbol("col", VARCHAR), MOCK_COLUMN_HANDLE),
                                 Optional.of(true))))
@@ -372,9 +368,9 @@ public class TestPushPredicateIntoTableScan
 
         tester().assertThat(pushPredicateIntoTableScan)
                 .withSession(session)
-                .on(p -> p.filter(expression("col = 'G'"),
+                .on(p -> p.filter(expression("col = VARCHAR 'G'"),
                         p.tableScan(
-                                PARTITIONED_TABLE_HANDLE,
+                                mockTableHandle(CONNECTOR_PARTITIONED_TABLE_HANDLE),
                                 ImmutableList.of(p.symbol("col", VARCHAR)),
                                 ImmutableMap.of(p.symbol("col", VARCHAR), MOCK_COLUMN_HANDLE),
                                 Optional.of(true))))
@@ -408,10 +404,10 @@ public class TestPushPredicateIntoTableScan
         return builder.build();
     }
 
-    private static TableHandle tableHandle(ConnectorTableHandle connectorTableHandle)
+    private TableHandle mockTableHandle(ConnectorTableHandle connectorTableHandle)
     {
         return new TableHandle(
-                new CatalogName(MOCK_CATALOG),
+                mockCatalogHandle,
                 connectorTableHandle,
                 TestingTransactionHandle.create());
     }

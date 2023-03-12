@@ -48,7 +48,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
-import static io.trino.testing.assertions.Assert.assertEquals;
+import static org.testng.Assert.assertEquals;
 
 public class TestDeltaLakeSplitManager
 {
@@ -261,7 +261,7 @@ public class TestDeltaLakeSplitManager
         }
 
         @Override
-        public void dropTable(ConnectorSession session, String databaseName, String tableName)
+        public void dropTable(ConnectorSession session, String databaseName, String tableName, boolean deleteData)
         {
             throw new UnsupportedOperationException("Unimplemented");
         }

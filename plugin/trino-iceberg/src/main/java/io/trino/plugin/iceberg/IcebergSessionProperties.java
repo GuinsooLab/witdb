@@ -36,6 +36,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.trino.plugin.base.session.PropertyMetadataUtil.dataSizeProperty;
 import static io.trino.plugin.base.session.PropertyMetadataUtil.durationProperty;
+import static io.trino.plugin.iceberg.IcebergConfig.EXTENDED_STATISTICS_DESCRIPTION;
 import static io.trino.spi.StandardErrorCode.INVALID_SESSION_PROPERTY;
 import static io.trino.spi.session.PropertyMetadata.booleanProperty;
 import static io.trino.spi.session.PropertyMetadata.doubleProperty;
@@ -65,18 +66,23 @@ public final class IcebergSessionProperties
     private static final String ORC_WRITER_MAX_STRIPE_ROWS = "orc_writer_max_stripe_rows";
     private static final String ORC_WRITER_MAX_DICTIONARY_MEMORY = "orc_writer_max_dictionary_memory";
     private static final String PARQUET_MAX_READ_BLOCK_SIZE = "parquet_max_read_block_size";
+    private static final String PARQUET_MAX_READ_BLOCK_ROW_COUNT = "parquet_max_read_block_row_count";
+    private static final String PARQUET_OPTIMIZED_READER_ENABLED = "parquet_optimized_reader_enabled";
+    private static final String PARQUET_OPTIMIZED_NESTED_READER_ENABLED = "parquet_optimized_nested_reader_enabled";
     private static final String PARQUET_WRITER_BLOCK_SIZE = "parquet_writer_block_size";
     private static final String PARQUET_WRITER_PAGE_SIZE = "parquet_writer_page_size";
     private static final String PARQUET_WRITER_BATCH_SIZE = "parquet_writer_batch_size";
     private static final String DYNAMIC_FILTERING_WAIT_TIMEOUT = "dynamic_filtering_wait_timeout";
     private static final String STATISTICS_ENABLED = "statistics_enabled";
+    public static final String EXTENDED_STATISTICS_ENABLED = "extended_statistics_enabled";
     private static final String PROJECTION_PUSHDOWN_ENABLED = "projection_pushdown_enabled";
     private static final String TARGET_MAX_FILE_SIZE = "target_max_file_size";
     private static final String HIVE_CATALOG_NAME = "hive_catalog_name";
     private static final String MINIMUM_ASSIGNED_SPLIT_WEIGHT = "minimum_assigned_split_weight";
     public static final String EXPIRE_SNAPSHOTS_MIN_RETENTION = "expire_snapshots_min_retention";
     public static final String REMOVE_ORPHAN_FILES_MIN_RETENTION = "remove_orphan_files_min_retention";
-    private static final String ALLOW_LEGACY_SNAPSHOT_SYNTAX = "allow_legacy_snapshot_syntax";
+    private static final String MERGE_MANIFESTS_ON_WRITE = "merge_manifests_on_write";
+    private static final String SORTED_WRITING_ENABLED = "sorted_writing_enabled";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -189,6 +195,28 @@ public final class IcebergSessionProperties
                         "Parquet: Maximum size of a block to read",
                         parquetReaderConfig.getMaxReadBlockSize(),
                         false))
+                .add(integerProperty(
+                        PARQUET_MAX_READ_BLOCK_ROW_COUNT,
+                        "Parquet: Maximum number of rows read in a batch",
+                        parquetReaderConfig.getMaxReadBlockRowCount(),
+                        value -> {
+                            if (value < 128 || value > 65536) {
+                                throw new TrinoException(
+                                        INVALID_SESSION_PROPERTY,
+                                        format("%s must be between 128 and 65536: %s", PARQUET_MAX_READ_BLOCK_ROW_COUNT, value));
+                            }
+                        },
+                        false))
+                .add(booleanProperty(
+                        PARQUET_OPTIMIZED_READER_ENABLED,
+                        "Use optimized Parquet reader",
+                        parquetReaderConfig.isOptimizedReaderEnabled(),
+                        false))
+                .add(booleanProperty(
+                        PARQUET_OPTIMIZED_NESTED_READER_ENABLED,
+                        "Use optimized Parquet reader for nested columns",
+                        parquetReaderConfig.isOptimizedNestedReaderEnabled(),
+                        false))
                 .add(dataSizeProperty(
                         PARQUET_WRITER_BLOCK_SIZE,
                         "Parquet: Writer block size",
@@ -213,6 +241,11 @@ public final class IcebergSessionProperties
                         STATISTICS_ENABLED,
                         "Expose table statistics",
                         icebergConfig.isTableStatisticsEnabled(),
+                        false))
+                .add(booleanProperty(
+                        EXTENDED_STATISTICS_ENABLED,
+                        EXTENDED_STATISTICS_DESCRIPTION,
+                        icebergConfig.isExtendedStatisticsEnabled(),
                         false))
                 .add(booleanProperty(
                         PROJECTION_PUSHDOWN_ENABLED,
@@ -247,9 +280,14 @@ public final class IcebergSessionProperties
                         icebergConfig.getRemoveOrphanFilesMinRetention(),
                         false))
                 .add(booleanProperty(
-                        ALLOW_LEGACY_SNAPSHOT_SYNTAX,
-                        "Allow snapshot access based on timestamp and snapshotid",
-                        icebergConfig.isAllowLegacySnapshotSyntax(),
+                        MERGE_MANIFESTS_ON_WRITE,
+                        "Compact manifest files when performing write operations",
+                        true,
+                        false))
+                .add(booleanProperty(
+                        SORTED_WRITING_ENABLED,
+                        "Enable sorted writing to tables with a specified sort order",
+                        icebergConfig.isSortedWritingEnabled(),
                         false))
                 .build();
     }
@@ -357,6 +395,21 @@ public final class IcebergSessionProperties
         return session.getProperty(PARQUET_MAX_READ_BLOCK_SIZE, DataSize.class);
     }
 
+    public static int getParquetMaxReadBlockRowCount(ConnectorSession session)
+    {
+        return session.getProperty(PARQUET_MAX_READ_BLOCK_ROW_COUNT, Integer.class);
+    }
+
+    public static boolean isParquetOptimizedReaderEnabled(ConnectorSession session)
+    {
+        return session.getProperty(PARQUET_OPTIMIZED_READER_ENABLED, Boolean.class);
+    }
+
+    public static boolean isParquetOptimizedNestedReaderEnabled(ConnectorSession session)
+    {
+        return session.getProperty(PARQUET_OPTIMIZED_NESTED_READER_ENABLED, Boolean.class);
+    }
+
     public static DataSize getParquetWriterPageSize(ConnectorSession session)
     {
         return session.getProperty(PARQUET_WRITER_PAGE_SIZE, DataSize.class);
@@ -380,6 +433,11 @@ public final class IcebergSessionProperties
     public static boolean isStatisticsEnabled(ConnectorSession session)
     {
         return session.getProperty(STATISTICS_ENABLED, Boolean.class);
+    }
+
+    public static boolean isExtendedStatisticsEnabled(ConnectorSession session)
+    {
+        return session.getProperty(EXTENDED_STATISTICS_ENABLED, Boolean.class);
     }
 
     public static boolean isProjectionPushdownEnabled(ConnectorSession session)
@@ -412,8 +470,13 @@ public final class IcebergSessionProperties
         return session.getProperty(MINIMUM_ASSIGNED_SPLIT_WEIGHT, Double.class);
     }
 
-    public static boolean isAllowLegacySnapshotSyntax(ConnectorSession session)
+    public static boolean isMergeManifestsOnWrite(ConnectorSession session)
     {
-        return session.getProperty(ALLOW_LEGACY_SNAPSHOT_SYNTAX, Boolean.class);
+        return session.getProperty(MERGE_MANIFESTS_ON_WRITE, Boolean.class);
+    }
+
+    public static boolean isSortedWritingEnabled(ConnectorSession session)
+    {
+        return session.getProperty(SORTED_WRITING_ENABLED, Boolean.class);
     }
 }

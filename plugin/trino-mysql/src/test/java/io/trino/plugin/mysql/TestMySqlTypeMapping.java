@@ -19,6 +19,7 @@ import io.trino.Session;
 import io.trino.plugin.jdbc.UnsupportedTypeHandling;
 import io.trino.spi.type.TimeZoneKey;
 import io.trino.testing.AbstractTestQueryFramework;
+import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.TestingSession;
 import io.trino.testing.datatype.CreateAndInsertDataSetup;
@@ -34,8 +35,12 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.math.RoundingMode;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
@@ -68,6 +73,7 @@ import static java.math.RoundingMode.HALF_UP;
 import static java.math.RoundingMode.UNNECESSARY;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Arrays.asList;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestMySqlTypeMapping
@@ -926,8 +932,36 @@ public class TestMySqlTypeMapping
                 {ZoneId.of("Europe/Vilnius")},
                 // minutes offset change since 1970-01-01, no DST
                 {ZoneId.of("Asia/Kathmandu")},
-                {ZoneId.of(TestingSession.DEFAULT_TIME_ZONE_KEY.getId())},
+                {TestingSession.DEFAULT_TIME_ZONE_KEY.getZoneId()},
         };
+    }
+
+    @Test
+    public void testZeroTimestamp()
+            throws Exception
+    {
+        String connectionUrl = mySqlServer.getJdbcUrl() + "&zeroDateTimeBehavior=convertToNull";
+
+        DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(getSession()).build();
+        queryRunner.installPlugin(new MySqlPlugin());
+        Map<String, String> properties = ImmutableMap.<String, String>builder()
+                .put("connection-url", connectionUrl)
+                .put("connection-user", mySqlServer.getUsername())
+                .put("connection-password", mySqlServer.getPassword())
+                .buildOrThrow();
+        queryRunner.createCatalog("mysql", "mysql", properties);
+
+        try (Connection connection = DriverManager.getConnection(connectionUrl, mySqlServer.getUsername(), mySqlServer.getPassword());
+                Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE tpch.test_zero_ts(col_dt datetime, col_ts timestamp)");
+            statement.execute("SET sql_mode=''");
+            statement.execute("INSERT INTO tpch.test_zero_ts(col_dt, col_ts) VALUES ('0000-00-00 00:00:00', '0000-00-00 00:00:00')");
+
+            assertThat(queryRunner.execute("SELECT col_dt FROM test_zero_ts").getOnlyValue()).isNull();
+            assertThat(queryRunner.execute("SELECT col_ts FROM test_zero_ts").getOnlyValue()).isNull();
+
+            statement.execute("DROP TABLE tpch.test_zero_ts");
+        }
     }
 
     @Test
@@ -1003,6 +1037,33 @@ public class TestMySqlTypeMapping
                 .addRoundTrip("INTEGER UNSIGNED", "4294967295", BIGINT, "4294967295")
                 .addRoundTrip("BIGINT UNSIGNED", "18446744073709551615", createDecimalType(20, 0), "DECIMAL '18446744073709551615'")
                 .execute(getQueryRunner(), mysqlCreateAndInsert("tpch.mysql_test_unsigned"));
+    }
+
+    @Test
+    public void testEnum()
+    {
+        SqlExecutor jdbcSqlExecutor = mySqlServer::execute;
+        // Define enum values in an order different from lexicographical
+        jdbcSqlExecutor.execute("CREATE TABLE tpch.test_enum(id int, enum_column ENUM ('b','a','C'))");
+        assertUpdate("INSERT INTO tpch.test_enum(id, enum_column) values (1,'a'),(2,'b'),(3, NULL)", 3);
+        try {
+            assertQuery(
+                    "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_name = 'test_enum'",
+                    "VALUES ('id','integer'),('enum_column','varchar(1)')");
+            assertQuery("SELECT * FROM test_enum", "VALUES (1,'a'),(2,'b'),(3,NULL)");
+            assertQuery("SELECT * FROM test_enum WHERE enum_column = 'a'", "VALUES (1, 'a')");
+            assertQuery("SELECT * FROM test_enum WHERE enum_column != 'a'", "VALUES (2, 'b')");
+            assertQuery("SELECT * FROM test_enum WHERE enum_column <= 'a'", "VALUES (1, 'a')");
+            assertQuery("SELECT * FROM test_enum WHERE enum_column <= 'b'", "VALUES (1, 'a'), (2, 'b')");
+            assertQuery("SELECT * FROM test_enum WHERE enum_column <= 'c'", "VALUES (1, 'a'), (2, 'b')");
+            assertQueryReturnsEmptyResult("SELECT * FROM test_enum WHERE enum_column <= 'C'");
+            assertQuery("SELECT * FROM test_enum WHERE enum_column IS NOT NULL", "VALUES (1, 'a'), (2, 'b')");
+            assertQuery("SELECT * FROM test_enum WHERE enum_column IS NULL", "VALUES (3, NULL)");
+            assertQuery("SELECT id FROM test_enum ORDER BY enum_column LIMIT 1", "VALUES (1)");
+        }
+        finally {
+            jdbcSqlExecutor.execute("DROP TABLE tpch.test_enum");
+        }
     }
 
     private void testUnsupportedDataType(String databaseDataType)

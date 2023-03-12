@@ -17,7 +17,6 @@ import com.google.common.annotations.VisibleForTesting;
 import io.trino.array.LongBigArray;
 import io.trino.util.HeapTraversal;
 import io.trino.util.LongBigArrayFIFOQueue;
-import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 
@@ -26,6 +25,7 @@ import java.util.function.LongConsumer;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
+import static io.airlift.slice.SizeOf.instanceSize;
 import static java.lang.Math.abs;
 import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
@@ -57,7 +57,7 @@ import static java.util.Objects.requireNonNull;
  */
 public class GroupedTopNRankAccumulator
 {
-    private static final long INSTANCE_SIZE = ClassLayout.parseClass(GroupedTopNRankAccumulator.class).instanceSize();
+    private static final long INSTANCE_SIZE = instanceSize(GroupedTopNRankAccumulator.class);
     private static final long UNKNOWN_INDEX = -1;
     private static final long NULL_GROUP_ID = -1;
 
@@ -119,7 +119,7 @@ public class GroupedTopNRankAccumulator
             heapInsert(groupId, newPeerGroupIndex, 1);
             return true;
         }
-        else if (rowReference.compareTo(strategy, peekRootRowId(groupId)) < 0) {
+        if (rowReference.compareTo(strategy, peekRootRowId(groupId)) < 0) {
             // Given that total number of values >= topN, we can only consider values that are less than the root (otherwise topN would be violated)
             long newPeerGroupIndex = peerGroupBuffer.allocateNewNode(rowReference.allocateRowId(), UNKNOWN_INDEX);
             // Rank will increase by +1 after insertion, so only need to pop if root rank is already == topN.
@@ -131,10 +131,8 @@ public class GroupedTopNRankAccumulator
             }
             return true;
         }
-        else {
-            // Row cannot be accepted because the total number of values >= topN, and the row is greater than the root (meaning it's rank would be at least topN+1).
-            return false;
-        }
+        // Row cannot be accepted because the total number of values >= topN, and the row is greater than the root (meaning it's rank would be at least topN+1).
+        return false;
     }
 
     /**
@@ -581,7 +579,7 @@ public class GroupedTopNRankAccumulator
      */
     private static class GroupIdToHeapBuffer
     {
-        private static final long INSTANCE_SIZE = ClassLayout.parseClass(GroupIdToHeapBuffer.class).instanceSize();
+        private static final long INSTANCE_SIZE = instanceSize(GroupIdToHeapBuffer.class);
         private static final int METRICS_POSITIONS_PER_ENTRY = 2;
         private static final int METRICS_HEAP_SIZE_OFFSET = 1;
 
@@ -679,7 +677,7 @@ public class GroupedTopNRankAccumulator
      */
     private static class HeapNodeBuffer
     {
-        private static final long INSTANCE_SIZE = ClassLayout.parseClass(HeapNodeBuffer.class).instanceSize();
+        private static final long INSTANCE_SIZE = instanceSize(HeapNodeBuffer.class);
         private static final int POSITIONS_PER_ENTRY = 4;
         private static final int PEER_GROUP_COUNT_OFFSET = 1;
         private static final int LEFT_CHILD_HEAP_INDEX_OFFSET = 2;
@@ -794,7 +792,7 @@ public class GroupedTopNRankAccumulator
      */
     private static class PeerGroupBuffer
     {
-        private static final long INSTANCE_SIZE = ClassLayout.parseClass(PeerGroupBuffer.class).instanceSize();
+        private static final long INSTANCE_SIZE = instanceSize(PeerGroupBuffer.class);
         private static final int POSITIONS_PER_ENTRY = 2;
         private static final int NEXT_PEER_INDEX_OFFSET = 1;
 

@@ -21,7 +21,6 @@ import io.trino.plugin.hive.metastore.Partition;
 import io.trino.plugin.hive.metastore.Storage;
 import io.trino.plugin.hive.metastore.Table;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 
@@ -41,7 +40,6 @@ import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static java.util.Collections.synchronizedList;
 import static java.util.Objects.requireNonNull;
-import static org.apache.commons.lang3.StringUtils.isNotEmpty;
 
 /**
  * Caches directory content (including listings that were started concurrently).
@@ -67,20 +65,20 @@ public class TransactionScopeCachingDirectoryLister
     }
 
     @Override
-    public RemoteIterator<LocatedFileStatus> list(FileSystem fs, Table table, Path path)
+    public RemoteIterator<TrinoFileStatus> list(FileSystem fs, Table table, Path path)
             throws IOException
     {
         return listInternal(fs, table, new DirectoryListingCacheKey(path, false));
     }
 
     @Override
-    public RemoteIterator<LocatedFileStatus> listFilesRecursively(FileSystem fs, Table table, Path path)
+    public RemoteIterator<TrinoFileStatus> listFilesRecursively(FileSystem fs, Table table, Path path)
             throws IOException
     {
         return listInternal(fs, table, new DirectoryListingCacheKey(path, true));
     }
 
-    private RemoteIterator<LocatedFileStatus> listInternal(FileSystem fs, Table table, DirectoryListingCacheKey cacheKey)
+    private RemoteIterator<TrinoFileStatus> listInternal(FileSystem fs, Table table, DirectoryListingCacheKey cacheKey)
             throws IOException
     {
         FetchingValueHolder cachedValueHolder;
@@ -101,15 +99,13 @@ public class TransactionScopeCachingDirectoryLister
         return cachingRemoteIterator(cachedValueHolder, cacheKey);
     }
 
-    private RemoteIterator<LocatedFileStatus> createListingRemoteIterator(FileSystem fs, Table table, DirectoryListingCacheKey cacheKey)
+    private RemoteIterator<TrinoFileStatus> createListingRemoteIterator(FileSystem fs, Table table, DirectoryListingCacheKey cacheKey)
             throws IOException
     {
         if (cacheKey.isRecursiveFilesOnly()) {
             return delegate.listFilesRecursively(fs, table, cacheKey.getPath());
         }
-        else {
-            return delegate.list(fs, table, cacheKey.getPath());
-        }
+        return delegate.list(fs, table, cacheKey.getPath());
     }
 
     @Override
@@ -136,7 +132,7 @@ public class TransactionScopeCachingDirectoryLister
         delegate.invalidate(partition);
     }
 
-    private RemoteIterator<LocatedFileStatus> cachingRemoteIterator(FetchingValueHolder cachedValueHolder, DirectoryListingCacheKey cacheKey)
+    private RemoteIterator<TrinoFileStatus> cachingRemoteIterator(FetchingValueHolder cachedValueHolder, DirectoryListingCacheKey cacheKey)
     {
         return new RemoteIterator<>()
         {
@@ -162,7 +158,7 @@ public class TransactionScopeCachingDirectoryLister
             }
 
             @Override
-            public LocatedFileStatus next()
+            public TrinoFileStatus next()
                     throws IOException
             {
                 // force cache entry weight update in case next file is cached
@@ -188,20 +184,20 @@ public class TransactionScopeCachingDirectoryLister
     private static boolean isLocationPresent(Storage storage)
     {
         // Some Hive table types (e.g.: views) do not have a storage location
-        return storage.getOptionalLocation().isPresent() && isNotEmpty(storage.getLocation());
+        return storage.getOptionalLocation().isPresent() && !storage.getLocation().isEmpty();
     }
 
     private static class FetchingValueHolder
     {
-        private final List<LocatedFileStatus> cachedFiles = synchronizedList(new ArrayList<>());
+        private final List<TrinoFileStatus> cachedFiles = synchronizedList(new ArrayList<>());
         @GuardedBy("this")
         @Nullable
-        private RemoteIterator<LocatedFileStatus> fileIterator;
+        private RemoteIterator<TrinoFileStatus> fileIterator;
         @GuardedBy("this")
         @Nullable
         private Exception exception;
 
-        public FetchingValueHolder(RemoteIterator<LocatedFileStatus> fileIterator)
+        public FetchingValueHolder(RemoteIterator<TrinoFileStatus> fileIterator)
         {
             this.fileIterator = requireNonNull(fileIterator, "fileIterator is null");
         }
@@ -216,13 +212,13 @@ public class TransactionScopeCachingDirectoryLister
             return cachedFiles.size();
         }
 
-        public Iterator<LocatedFileStatus> getCachedFiles()
+        public Iterator<TrinoFileStatus> getCachedFiles()
         {
             checkState(isFullyCached());
             return cachedFiles.iterator();
         }
 
-        public Optional<LocatedFileStatus> getCachedFile(int index)
+        public Optional<TrinoFileStatus> getCachedFile(int index)
                 throws IOException
         {
             int filesSize = cachedFiles.size();
@@ -236,7 +232,7 @@ public class TransactionScopeCachingDirectoryLister
             return fetchNextCachedFile(index);
         }
 
-        private synchronized Optional<LocatedFileStatus> fetchNextCachedFile(int index)
+        private synchronized Optional<TrinoFileStatus> fetchNextCachedFile(int index)
                 throws IOException
         {
             if (exception != null) {
@@ -255,7 +251,7 @@ public class TransactionScopeCachingDirectoryLister
                     return Optional.empty();
                 }
 
-                LocatedFileStatus fileStatus = fileIterator.next();
+                TrinoFileStatus fileStatus = fileIterator.next();
                 cachedFiles.add(fileStatus);
                 return Optional.of(fileStatus);
             }

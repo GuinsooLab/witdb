@@ -49,13 +49,13 @@ import io.trino.plugin.jdbc.aggregation.ImplementSum;
 import io.trino.plugin.jdbc.aggregation.ImplementVariancePop;
 import io.trino.plugin.jdbc.aggregation.ImplementVarianceSamp;
 import io.trino.plugin.jdbc.expression.JdbcConnectorExpressionRewriterBuilder;
+import io.trino.plugin.jdbc.logging.RemoteQueryModifier;
 import io.trino.plugin.jdbc.mapping.IdentifierMapping;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.JoinCondition;
-import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.type.CharType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.Decimals;
@@ -67,7 +67,6 @@ import oracle.jdbc.OracleTypes;
 import javax.inject.Inject;
 
 import java.math.RoundingMode;
-import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -130,10 +129,8 @@ import static io.trino.spi.type.TinyintType.TINYINT;
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
 import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.trino.spi.type.VarcharType.createVarcharType;
-import static java.lang.Character.MAX_RADIX;
 import static java.lang.Float.floatToRawIntBits;
 import static java.lang.Float.intBitsToFloat;
-import static java.lang.Math.abs;
 import static java.lang.Math.floorDiv;
 import static java.lang.Math.floorMod;
 import static java.lang.Math.max;
@@ -141,17 +138,12 @@ import static java.lang.Math.min;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
-import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.DAYS;
 
 public class OracleClient
         extends BaseJdbcClient
 {
     public static final int ORACLE_MAX_LIST_EXPRESSIONS = 1000;
-
-    // Oracle before 12.2 doesn't allow identifiers over 30 characters
-    private static final int ORACLE_MAX_IDENTIFIER_LENGTH = 30;
-    private static final SecureRandom RANDOM = new SecureRandom();
 
     private static final int MAX_BYTES_PER_CHAR = 4;
 
@@ -208,18 +200,18 @@ public class OracleClient
             OracleConfig oracleConfig,
             ConnectionFactory connectionFactory,
             QueryBuilder queryBuilder,
-            IdentifierMapping identifierMapping)
+            IdentifierMapping identifierMapping,
+            RemoteQueryModifier queryModifier)
     {
-        super(config, "\"", connectionFactory, queryBuilder, identifierMapping);
+        super(config, "\"", connectionFactory, queryBuilder, identifierMapping, queryModifier);
 
-        requireNonNull(oracleConfig, "oracleConfig is null");
         this.synonymsEnabled = oracleConfig.isSynonymsEnabled();
 
         this.connectorExpressionRewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder()
                 .addStandardRules(this::quoted)
                 .build();
 
-        JdbcTypeHandle bigintTypeHandle = new JdbcTypeHandle(TRINO_BIGINT_TYPE, Optional.of("NUMBER"), 0, 0, Optional.empty(), Optional.empty());
+        JdbcTypeHandle bigintTypeHandle = new JdbcTypeHandle(TRINO_BIGINT_TYPE, Optional.of("NUMBER"), Optional.of(0), Optional.of(0), Optional.empty(), Optional.empty());
         this.aggregateFunctionRewriter = new AggregateFunctionRewriter<>(
                 connectorExpressionRewriter,
                 ImmutableSet.<AggregateFunctionRule<JdbcExpression, String>>builder()
@@ -267,31 +259,18 @@ public class OracleClient
     }
 
     @Override
-    protected String generateTemporaryTableName()
+    protected void renameTable(ConnectorSession session, Connection connection, String catalogName, String remoteSchemaName, String remoteTableName, String newRemoteSchemaName, String newRemoteTableName)
+            throws SQLException
     {
-        String tableName = "tmp_trino_" + System.nanoTime() + Long.toString(abs(RANDOM.nextLong()), MAX_RADIX);
-        return tableName.substring(0, min(ORACLE_MAX_IDENTIFIER_LENGTH, tableName.length()));
-    }
-
-    @Override
-    protected void renameTable(ConnectorSession session, String catalogName, String schemaName, String tableName, SchemaTableName newTable)
-    {
-        if (!schemaName.equalsIgnoreCase(newTable.getSchemaName())) {
+        if (!remoteSchemaName.equals(newRemoteSchemaName)) {
             throw new TrinoException(NOT_SUPPORTED, "This connector does not support renaming tables across schemas");
         }
 
-        String newTableName = newTable.getTableName().toUpperCase(ENGLISH);
-        String sql = format(
+        String newTableName = newRemoteTableName.toUpperCase(ENGLISH);
+        execute(session, connection, format(
                 "ALTER TABLE %s RENAME TO %s",
-                quoted(catalogName, schemaName, tableName),
-                quoted(newTableName));
-
-        try (Connection connection = connectionFactory.openConnection(session)) {
-            execute(connection, sql);
-        }
-        catch (SQLException e) {
-            throw new TrinoException(JDBC_ERROR, e);
-        }
+                quoted(catalogName, remoteSchemaName, remoteTableName),
+                quoted(newTableName)));
     }
 
     @Override
@@ -458,7 +437,7 @@ public class OracleClient
 
     private static Optional<JdbcTypeHandle> toTypeHandle(DecimalType decimalType)
     {
-        return Optional.of(new JdbcTypeHandle(OracleTypes.NUMBER, Optional.of("NUMBER"), decimalType.getPrecision(), decimalType.getScale(), Optional.empty()));
+        return Optional.of(new JdbcTypeHandle(OracleTypes.NUMBER, Optional.of("NUMBER"), Optional.of(decimalType.getPrecision()), Optional.of(decimalType.getScale()), Optional.empty(), Optional.empty()));
     }
 
     @Override
@@ -597,7 +576,7 @@ public class OracleClient
     {
         return LongWriteFunction.of(OracleTypes.TIMESTAMPTZ, (statement, index, encodedTimeWithZone) -> {
             Instant time = Instant.ofEpochMilli(unpackMillisUtc(encodedTimeWithZone));
-            ZoneId zone = ZoneId.of(unpackZoneKey(encodedTimeWithZone).getId());
+            ZoneId zone = unpackZoneKey(encodedTimeWithZone).getZoneId();
             statement.setObject(index, time.atZone(zone));
         });
     }
@@ -632,9 +611,8 @@ public class OracleClient
     @Override
     public WriteMapping toWriteMapping(ConnectorSession session, Type type)
     {
-        if (type instanceof VarcharType) {
+        if (type instanceof VarcharType varcharType) {
             String dataType;
-            VarcharType varcharType = (VarcharType) type;
             if (varcharType.isUnbounded() || varcharType.getBoundedLength() > ORACLE_VARCHAR2_MAX_CHARS) {
                 dataType = "nclob";
             }
@@ -643,22 +621,22 @@ public class OracleClient
             }
             return WriteMapping.sliceMapping(dataType, varcharWriteFunction());
         }
-        if (type instanceof CharType) {
+        if (type instanceof CharType charType) {
             String dataType;
-            if (((CharType) type).getLength() > ORACLE_CHAR_MAX_CHARS) {
+            if (charType.getLength() > ORACLE_CHAR_MAX_CHARS) {
                 dataType = "nclob";
             }
             else {
-                dataType = "char(" + ((CharType) type).getLength() + " CHAR)";
+                dataType = "char(" + charType.getLength() + " CHAR)";
             }
             return WriteMapping.sliceMapping(dataType, oracleCharWriteFunction());
         }
-        if (type instanceof DecimalType) {
-            String dataType = format("number(%s, %s)", ((DecimalType) type).getPrecision(), ((DecimalType) type).getScale());
-            if (((DecimalType) type).isShort()) {
-                return WriteMapping.longMapping(dataType, shortDecimalWriteFunction((DecimalType) type));
+        if (type instanceof DecimalType decimalType) {
+            String dataType = format("number(%s, %s)", decimalType.getPrecision(), decimalType.getScale());
+            if (decimalType.isShort()) {
+                return WriteMapping.longMapping(dataType, shortDecimalWriteFunction(decimalType));
             }
-            return WriteMapping.objectMapping(dataType, longDecimalWriteFunction((DecimalType) type));
+            return WriteMapping.objectMapping(dataType, longDecimalWriteFunction(decimalType));
         }
         if (type.equals(TIMESTAMP_SECONDS)) {
             // Specify 'date' instead of 'timestamp(0)' to propagate the type in case of CTAS from date columns
@@ -678,11 +656,18 @@ public class OracleClient
     @Override
     public void setColumnComment(ConnectorSession session, JdbcTableHandle handle, JdbcColumnHandle column, Optional<String> comment)
     {
+        // Oracle doesn't support prepared statement for COMMENT statement
         String sql = format(
-                "COMMENT ON COLUMN %s.%s IS '%s'",
+                "COMMENT ON COLUMN %s.%s IS %s",
                 quoted(handle.asPlainTable().getRemoteTableName()),
                 quoted(column.getColumnName()),
-                comment.orElse(""));
+                varcharLiteral(comment.orElse("")));
         execute(session, sql);
+    }
+
+    @Override
+    public void setColumnType(ConnectorSession session, JdbcTableHandle handle, JdbcColumnHandle column, Type type)
+    {
+        throw new TrinoException(NOT_SUPPORTED, "This connector does not support setting column types");
     }
 }

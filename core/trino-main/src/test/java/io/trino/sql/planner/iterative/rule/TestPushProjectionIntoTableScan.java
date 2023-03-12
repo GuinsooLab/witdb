@@ -16,7 +16,6 @@ package io.trino.sql.planner.iterative.rule;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.connector.MockConnectorFactory;
 import io.trino.connector.MockConnectorTableHandle;
 import io.trino.cost.PlanNodeStatsEstimate;
@@ -76,7 +75,8 @@ import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.expression;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.project;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.tableScan;
-import static io.trino.sql.planner.iterative.rule.test.RuleTester.defaultRuleTester;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_HANDLE;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static java.util.Arrays.asList;
 import static java.util.Locale.ENGLISH;
@@ -84,29 +84,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestPushProjectionIntoTableScan
 {
-    private static final String MOCK_CATALOG = "mock_catalog";
     private static final String TEST_SCHEMA = "test_schema";
     private static final String TEST_TABLE = "test_table";
-    private static final SchemaTableName TEST_SCHEMA_TABLE = new SchemaTableName(TEST_SCHEMA, TEST_TABLE);
     private static final Type ROW_TYPE = RowType.from(asList(field("a", BIGINT), field("b", BIGINT)));
 
-    private static final TableHandle TEST_TABLE_HANDLE = createTableHandle(TEST_SCHEMA, TEST_TABLE);
     private static final ConnectorPartitioningHandle PARTITIONING_HANDLE = new ConnectorPartitioningHandle() {};
 
-    private static final Session MOCK_SESSION = testSessionBuilder().setCatalog(MOCK_CATALOG).setSchema(TEST_SCHEMA).build();
+    private static final Session MOCK_SESSION = testSessionBuilder().setCatalog(TEST_CATALOG_NAME).setSchema(TEST_SCHEMA).build();
 
     @Test
     public void testDoesNotFire()
     {
-        try (RuleTester ruleTester = defaultRuleTester()) {
-            String columnName = "input_column";
-            Type columnType = ROW_TYPE;
-            ColumnHandle inputColumnHandle = column(columnName, columnType);
+        String columnName = "input_column";
+        Type columnType = ROW_TYPE;
+        ColumnHandle inputColumnHandle = column(columnName, columnType);
 
-            MockConnectorFactory factory = createMockFactory(ImmutableMap.of(columnName, inputColumnHandle), Optional.empty());
-
-            ruleTester.getQueryRunner().createCatalog(MOCK_CATALOG, factory, ImmutableMap.of());
-
+        MockConnectorFactory factory = createMockFactory(ImmutableMap.of(columnName, inputColumnHandle), Optional.empty());
+        try (RuleTester ruleTester = RuleTester.builder().withDefaultCatalogConnectorFactory(factory).build()) {
             PushProjectionIntoTableScan optimizer = createRule(ruleTester);
 
             ruleTester.assertThat(optimizer)
@@ -114,7 +108,10 @@ public class TestPushProjectionIntoTableScan
                         Symbol symbol = p.symbol(columnName, columnType);
                         return p.project(
                                 Assignments.of(p.symbol("symbol_dereference", BIGINT), new SubscriptExpression(symbol.toSymbolReference(), new LongLiteral("1"))),
-                                p.tableScan(TEST_TABLE_HANDLE, ImmutableList.of(symbol), ImmutableMap.of(symbol, inputColumnHandle)));
+                                p.tableScan(
+                                        ruleTester.getCurrentCatalogTableHandle(TEST_SCHEMA, TEST_TABLE),
+                                        ImmutableList.of(symbol),
+                                        ImmutableMap.of(symbol, inputColumnHandle)));
                     })
                     .withSession(MOCK_SESSION)
                     .doesNotFire();
@@ -124,17 +121,15 @@ public class TestPushProjectionIntoTableScan
     @Test
     public void testPushProjection()
     {
-        try (RuleTester ruleTester = defaultRuleTester()) {
-            // Building context for input
-            String columnName = "col0";
-            Type columnType = ROW_TYPE;
-            Symbol baseColumn = new Symbol(columnName);
-            ColumnHandle columnHandle = new TpchColumnHandle(columnName, columnType);
+        // Building context for input
+        String columnName = "col0";
+        Type columnType = ROW_TYPE;
+        Symbol baseColumn = new Symbol(columnName);
+        ColumnHandle columnHandle = new TpchColumnHandle(columnName, columnType);
 
-            // Create catalog with applyProjection enabled
-            MockConnectorFactory factory = createMockFactory(ImmutableMap.of(columnName, columnHandle), Optional.of(this::mockApplyProjection));
-            ruleTester.getQueryRunner().createCatalog(MOCK_CATALOG, factory, ImmutableMap.of());
-
+        // Create catalog with applyProjection enabled
+        MockConnectorFactory factory = createMockFactory(ImmutableMap.of(columnName, columnHandle), Optional.of(this::mockApplyProjection));
+        try (RuleTester ruleTester = RuleTester.builder().withDefaultCatalogConnectorFactory(factory).build()) {
             TypeAnalyzer typeAnalyzer = createTestingTypeAnalyzer(ruleTester.getPlannerContext());
 
             // Prepare project node symbols and types
@@ -160,7 +155,7 @@ public class TestPushProjectionIntoTableScan
             TransactionId transactionId = ruleTester.getQueryRunner().getTransactionManager().beginTransaction(false);
             Session session = MOCK_SESSION.beginTransactionId(transactionId, ruleTester.getQueryRunner().getTransactionManager(), ruleTester.getQueryRunner().getAccessControl());
             ImmutableMap<Symbol, String> connectorNames = inputProjections.entrySet().stream()
-                    .collect(toImmutableMap(Map.Entry::getKey, e -> translate(session, e.getValue(), typeAnalyzer, viewOf(types), ruleTester.getPlannerContext()).get().toString()));
+                    .collect(toImmutableMap(Map.Entry::getKey, e -> translate(session, e.getValue(), viewOf(types), ruleTester.getPlannerContext(), typeAnalyzer).get().toString()));
             ImmutableMap<Symbol, String> newNames = ImmutableMap.of(
                     identity, "projected_variable_" + connectorNames.get(identity),
                     dereference, "projected_dereference_" + connectorNames.get(dereference),
@@ -179,7 +174,7 @@ public class TestPushProjectionIntoTableScan
                         return p.project(
                                 new Assignments(inputProjections),
                                 p.tableScan(tableScan -> tableScan
-                                        .setTableHandle(TEST_TABLE_HANDLE)
+                                        .setTableHandle(ruleTester.getCurrentCatalogTableHandle(TEST_SCHEMA, TEST_TABLE))
                                         .setSymbols(ImmutableList.copyOf(types.keySet()))
                                         .setAssignments(types.keySet().stream()
                                                 .collect(Collectors.toMap(Function.identity(), v -> columnHandle)))
@@ -226,20 +221,18 @@ public class TestPushProjectionIntoTableScan
     @Test
     public void testPartitioningChanged()
     {
-        try (RuleTester ruleTester = defaultRuleTester()) {
-            String columnName = "col0";
-            ColumnHandle columnHandle = new TpchColumnHandle(columnName, VARCHAR);
+        String columnName = "col0";
+        ColumnHandle columnHandle = new TpchColumnHandle(columnName, VARCHAR);
 
-            // Create catalog with applyProjection enabled
-            MockConnectorFactory factory = createMockFactory(ImmutableMap.of(columnName, columnHandle), Optional.of(this::mockApplyProjection));
-            ruleTester.getQueryRunner().createCatalog(MOCK_CATALOG, factory, ImmutableMap.of());
-
+        // Create catalog with applyProjection enabled
+        MockConnectorFactory factory = createMockFactory(ImmutableMap.of(columnName, columnHandle), Optional.of(this::mockApplyProjection));
+        try (RuleTester ruleTester = RuleTester.builder().withDefaultCatalogConnectorFactory(factory).build()) {
             assertThatThrownBy(() -> ruleTester.assertThat(createRule(ruleTester))
                     // projection pushdown results in different table handle without partitioning
                     .on(p -> p.project(
                             Assignments.of(),
                             p.tableScan(
-                                    TEST_TABLE_HANDLE,
+                                    ruleTester.getCurrentCatalogTableHandle(TEST_SCHEMA, TEST_TABLE),
                                     ImmutableList.of(p.symbol("col", VARCHAR)),
                                     ImmutableMap.of(p.symbol("col", VARCHAR), columnHandle),
                                     Optional.of(true))))
@@ -257,7 +250,7 @@ public class TestPushProjectionIntoTableScan
 
         MockConnectorFactory.Builder builder = MockConnectorFactory.builder()
                 .withListSchemaNames(connectorSession -> ImmutableList.of(TEST_SCHEMA))
-                .withListTables((connectorSession, schema) -> TEST_SCHEMA.equals(schema) ? ImmutableList.of(TEST_SCHEMA_TABLE) : ImmutableList.of())
+                .withListTables((connectorSession, schema) -> TEST_SCHEMA.equals(schema) ? ImmutableList.of(TEST_TABLE) : ImmutableList.of())
                 .withGetColumns(schemaTableName -> metadata)
                 .withGetTableProperties((session, tableHandle) -> {
                     MockConnectorTableHandle mockTableHandle = (MockConnectorTableHandle) tableHandle;
@@ -343,7 +336,7 @@ public class TestPushProjectionIntoTableScan
     private static TableHandle createTableHandle(String schemaName, String tableName)
     {
         return new TableHandle(
-                new CatalogName(MOCK_CATALOG),
+                TEST_CATALOG_HANDLE,
                 new MockConnectorTableHandle(new SchemaTableName(schemaName, tableName)),
                 TestingTransactionHandle.create());
     }

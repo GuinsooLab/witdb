@@ -14,13 +14,15 @@
 package io.trino.transaction;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import io.airlift.units.Duration;
-import io.trino.connector.CatalogName;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.transaction.IsolationLevel;
 import org.joda.time.DateTime;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -32,8 +34,9 @@ public class TransactionInfo
     private final boolean autoCommitContext;
     private final DateTime createTime;
     private final Duration idleTime;
-    private final List<CatalogName> catalogNames;
-    private final Optional<CatalogName> writtenConnectorId;
+    private final List<String> catalogNames;
+    private final Optional<String> writtenCatalogName;
+    private final Set<CatalogHandle> activeCatalogs;
 
     public TransactionInfo(
             TransactionId transactionId,
@@ -42,8 +45,9 @@ public class TransactionInfo
             boolean autoCommitContext,
             DateTime createTime,
             Duration idleTime,
-            List<CatalogName> catalogNames,
-            Optional<CatalogName> writtenConnectorId)
+            List<String> catalogNames,
+            Optional<String> writtenCatalogName,
+            Set<CatalogHandle> activeCatalogs)
     {
         this.transactionId = requireNonNull(transactionId, "transactionId is null");
         this.isolationLevel = requireNonNull(isolationLevel, "isolationLevel is null");
@@ -52,7 +56,8 @@ public class TransactionInfo
         this.createTime = requireNonNull(createTime, "createTime is null");
         this.idleTime = requireNonNull(idleTime, "idleTime is null");
         this.catalogNames = ImmutableList.copyOf(requireNonNull(catalogNames, "catalogNames is null"));
-        this.writtenConnectorId = requireNonNull(writtenConnectorId, "writtenConnectorId is null");
+        this.writtenCatalogName = requireNonNull(writtenCatalogName, "writtenCatalogName is null");
+        this.activeCatalogs = ImmutableSet.copyOf(requireNonNull(activeCatalogs, "activeCatalogs is null"));
     }
 
     public TransactionId getTransactionId()
@@ -85,13 +90,18 @@ public class TransactionInfo
         return idleTime;
     }
 
-    public List<CatalogName> getCatalogNames()
+    public List<String> getCatalogNames()
     {
         return catalogNames;
     }
 
-    public Optional<CatalogName> getWrittenConnectorId()
+    public Optional<String> getWrittenCatalogName()
     {
-        return writtenConnectorId;
+        return writtenCatalogName;
+    }
+
+    public Set<CatalogHandle> getActiveCatalogs()
+    {
+        return activeCatalogs;
     }
 }

@@ -13,12 +13,14 @@
  */
 package io.trino.spi.ptf;
 
+import io.trino.spi.Experimental;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 
 import java.util.List;
 import java.util.Map;
 
+@Experimental(eta = "2022-10-31")
 public interface ConnectorTableFunction
 {
     String getSchema();
@@ -32,7 +34,7 @@ public interface ConnectorTableFunction
     /**
      * This method is called by the Analyzer. Its main purposes are to:
      * 1. Determine the resulting relation type of the Table Function in case when the declared return type is GENERIC_TABLE.
-     * 2. Declare the dependencies between the input descriptors and the input tables.
+     * 2. Declare the required columns from the input tables.
      * 3. Perform function-specific validation and pre-processing of the input arguments.
      * As part of function-specific validation, the Table Function's author might want to:
      * - check if the descriptors which reference input tables contain a correct number of column references

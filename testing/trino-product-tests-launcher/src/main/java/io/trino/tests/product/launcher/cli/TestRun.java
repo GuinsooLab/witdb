@@ -18,6 +18,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Files;
 import com.google.inject.Module;
+import dev.failsafe.Failsafe;
+import dev.failsafe.Timeout;
+import dev.failsafe.TimeoutExceededException;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.trino.tests.product.launcher.Extensions;
@@ -30,9 +33,6 @@ import io.trino.tests.product.launcher.env.EnvironmentModule;
 import io.trino.tests.product.launcher.env.EnvironmentOptions;
 import io.trino.tests.product.launcher.env.SupportedTrinoJdk;
 import io.trino.tests.product.launcher.testcontainers.ExistingNetwork;
-import net.jodah.failsafe.Failsafe;
-import net.jodah.failsafe.Timeout;
-import net.jodah.failsafe.TimeoutExceededException;
 import picocli.CommandLine.ExitCode;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Parameters;
@@ -50,7 +50,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Callable;
-import java.util.function.Supplier;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -95,7 +94,7 @@ public final class TestRun
 
     public TestRun(Extensions extensions)
     {
-        this.additionalEnvironments = requireNonNull(extensions, "extensions is null").getAdditionalEnvironments();
+        this.additionalEnvironments = extensions.getAdditionalEnvironments();
     }
 
     @Override
@@ -186,7 +185,7 @@ public final class TestRun
             this.environmentFactory = requireNonNull(environmentFactory, "environmentFactory is null");
             requireNonNull(environmentOptions, "environmentOptions is null");
             this.debug = environmentOptions.debug;
-            this.debugSuspend = requireNonNull(testRunOptions, "testRunOptions is null").debugSuspend;
+            this.debugSuspend = testRunOptions.debugSuspend;
             this.jdkVersion = requireNonNull(environmentOptions.jdkVersion, "environmentOptions.jdkVersion is null");
             this.testJar = requireNonNull(testRunOptions.testJar, "testRunOptions.testJar is null");
             this.cliJar = requireNonNull(testRunOptions.cliJar, "testRunOptions.cliJar is null");
@@ -225,8 +224,9 @@ public final class TestRun
 
             try {
                 int exitCode = Failsafe
-                        .with(Timeout.of(java.time.Duration.ofMillis(timeoutMillis))
-                                .withCancel(true))
+                        .with(Timeout.builder(java.time.Duration.ofMillis(timeoutMillis))
+                                .withInterrupt()
+                                .build())
                         .get(this::tryExecuteTests);
 
                 log.info("Tests execution completed with code %d", exitCode);
@@ -274,16 +274,14 @@ public final class TestRun
                 return parts.length < 2 ? "" : parts[1];
             }, toList())));
             // see PluginReader. printPluginFeatures() for all possible feature prefixes
-            Map<String, Supplier<List<String>>> environmentFeaturesByName = Map.of(
-                    "connector", environment::getConfiguredConnectors,
-                    "passwordAuthenticator", environment::getConfiguredPasswordAuthenticators);
+            Map<String, List<String>> environmentFeaturesByName = environment.getConfiguredFeatures();
             for (Map.Entry<String, List<String>> entry : featuresByName.entrySet()) {
                 String name = entry.getKey();
                 List<String> features = entry.getValue();
                 if (!environmentFeaturesByName.containsKey(name)) {
                     return true;
                 }
-                List<String> environmentFeatures = environmentFeaturesByName.get(name).get();
+                List<String> environmentFeatures = environmentFeaturesByName.get(name);
                 log.info("Checking if impacted %s %s are overlapping with %s configured in the environment",
                         name, features, environmentFeatures);
                 if (environmentFeatures.stream().anyMatch(features::contains)) {
@@ -351,7 +349,7 @@ public final class TestRun
                                         // Force Parallel GC to ensure MaxHeapFreeRatio is respected
                                         "-XX:+UseParallelGC",
                                         "-XX:MinHeapFreeRatio=10",
-                                        "-XX:MaxHeapFreeRatio=10",
+                                        "-XX:MaxHeapFreeRatio=50",
                                         "-Djava.util.logging.config.file=/docker/presto-product-tests/conf/tempto/logging.properties",
                                         "-Duser.timezone=Asia/Kathmandu",
                                         // Tempto has progress logging built in

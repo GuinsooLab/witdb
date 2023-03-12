@@ -32,6 +32,7 @@ import io.trino.execution.StageId;
 import io.trino.execution.TaskId;
 import io.trino.metadata.FunctionManager;
 import io.trino.metadata.Metadata;
+import io.trino.operator.RetryPolicy;
 import io.trino.operator.join.JoinUtils;
 import io.trino.spi.QueryId;
 import io.trino.spi.connector.ColumnHandle;
@@ -48,6 +49,7 @@ import io.trino.sql.planner.Symbol;
 import io.trino.sql.planner.TypeProvider;
 import io.trino.sql.planner.optimizations.PlanNodeSearcher;
 import io.trino.sql.planner.plan.DynamicFilterId;
+import io.trino.sql.planner.plan.DynamicFilterSourceNode;
 import io.trino.sql.planner.plan.JoinNode;
 import io.trino.sql.planner.plan.PlanNode;
 import io.trino.sql.planner.plan.SemiJoinNode;
@@ -89,6 +91,7 @@ import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.concurrent.MoreFutures.toCompletableFuture;
 import static io.airlift.concurrent.MoreFutures.unmodifiableFuture;
 import static io.airlift.concurrent.MoreFutures.whenAnyComplete;
+import static io.trino.SystemSessionProperties.getRetryPolicy;
 import static io.trino.SystemSessionProperties.isEnableLargeDynamicFilters;
 import static io.trino.spi.connector.DynamicFilter.EMPTY;
 import static io.trino.spi.predicate.Domain.union;
@@ -106,7 +109,8 @@ public class DynamicFilterService
     private final Metadata metadata;
     private final FunctionManager functionManager;
     private final TypeOperators typeOperators;
-    private final DynamicFilterConfig dynamicFilterConfig;
+    private final DataSize largeMaxSizePerFilter;
+    private final DataSize smallMaxSizePerFilter;
     private final Map<QueryId, DynamicFilterContext> dynamicFilterContexts = new ConcurrentHashMap<>();
 
     @Inject
@@ -115,7 +119,8 @@ public class DynamicFilterService
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.functionManager = requireNonNull(functionManager, "functionManager is null");
         this.typeOperators = requireNonNull(typeOperators, "typeOperators is null");
-        this.dynamicFilterConfig = requireNonNull(dynamicFilterConfig, "dynamicFilterConfig is null");
+        this.largeMaxSizePerFilter = dynamicFilterConfig.getLargeMaxSizePerFilter();
+        this.smallMaxSizePerFilter = dynamicFilterConfig.getSmallMaxSizePerFilter();
     }
 
     public void registerQuery(SqlQueryExecution sqlQueryExecution, SubPlan fragmentedPlan)
@@ -159,9 +164,9 @@ public class DynamicFilterService
     private DataSize getDynamicFilterSizeLimit(Session session)
     {
         if (isEnableLargeDynamicFilters(session)) {
-            return dynamicFilterConfig.getLargeMaxSizePerFilter();
+            return largeMaxSizePerFilter;
         }
-        return dynamicFilterConfig.getSmallMaxSizePerFilter();
+        return smallMaxSizePerFilter;
     }
 
     public void registerQueryRetry(QueryId queryId, int attemptId)
@@ -216,7 +221,7 @@ public class DynamicFilterService
     }
 
     /**
-     * Dynamic filters are collected in same stage as the join operator. This can result in deadlock
+     * Dynamic filters are collected in same stage as the join operator in pipelined execution. This can result in deadlock
      * for source stage joins and connectors that wait for dynamic filters before generating splits
      * (probe splits might be blocked on dynamic filters which require at least one probe task in order to be collected).
      * To overcome this issue an initial task is created for source stages running broadcast join operator.
@@ -226,7 +231,7 @@ public class DynamicFilterService
     {
         DynamicFilterContext context = dynamicFilterContexts.get(queryId);
         if (context == null) {
-            // query has been removed or not registered (e.g dynamic filtering is disabled)
+            // query has been removed or not registered (e.g. dynamic filtering is disabled)
             return false;
         }
 
@@ -238,7 +243,7 @@ public class DynamicFilterService
     {
         DynamicFilterContext context = dynamicFilterContexts.get(queryId);
         if (context == null) {
-            // query has been removed or not registered (e.g dynamic filtering is disabled)
+            // query has been removed or not registered (e.g. dynamic filtering is disabled)
             return false;
         }
 
@@ -260,6 +265,7 @@ public class DynamicFilterService
             // or a newer attempt has already been triggered
             return;
         }
+        checkState(!context.isTaskRetriesEnabled(), "unblockStageDynamicFilters is not required for task retry mode");
         checkState(
                 attemptId == context.getAttemptId(),
                 "Query %s retry attempt %s has not been registered with dynamic filter service",
@@ -369,7 +375,7 @@ public class DynamicFilterService
             return;
         }
         checkState(
-                attemptId == context.getAttemptId(),
+                context.isTaskRetriesEnabled() || attemptId == context.getAttemptId(),
                 "Query %s retry attempt %s has not been registered with dynamic filter service",
                 queryId,
                 attemptId);
@@ -385,9 +391,9 @@ public class DynamicFilterService
             return;
         }
         checkState(
-                taskAttemptId == context.getAttemptId(),
-                "Task %s retry attempt %s has not been registered with dynamic filter service",
-                taskId,
+                context.isTaskRetriesEnabled() || taskAttemptId == context.getAttemptId(),
+                "Query %s retry attempt %s has not been registered with dynamic filter service",
+                taskId.getQueryId(),
                 taskAttemptId);
         context.addTaskDynamicFilters(taskId, newDynamicFilters);
     }
@@ -486,7 +492,7 @@ public class DynamicFilterService
     private static Set<DynamicFilterId> getProducedDynamicFilters(PlanNode planNode)
     {
         return PlanNodeSearcher.searchFrom(planNode)
-                .whereIsInstanceOfAny(JoinNode.class, SemiJoinNode.class)
+                .whereIsInstanceOfAny(JoinNode.class, SemiJoinNode.class, DynamicFilterSourceNode.class)
                 .findAll().stream()
                 .flatMap(node -> getDynamicFiltersProducedInPlanNode(node).stream())
                 .collect(toImmutableSet());
@@ -499,6 +505,9 @@ public class DynamicFilterService
         }
         if (planNode instanceof SemiJoinNode) {
             return ((SemiJoinNode) planNode).getDynamicFilterId().map(ImmutableSet::of).orElse(ImmutableSet.of());
+        }
+        if (planNode instanceof DynamicFilterSourceNode) {
+            return ((DynamicFilterSourceNode) planNode).getDynamicFilters().keySet();
         }
         throw new IllegalStateException("getDynamicFiltersProducedInPlanNode called with neither JoinNode nor SemiJoinNode");
     }
@@ -1016,6 +1025,11 @@ public class DynamicFilterService
         private int getAttemptId()
         {
             return attemptId;
+        }
+
+        private boolean isTaskRetriesEnabled()
+        {
+            return getRetryPolicy(session) == RetryPolicy.TASK;
         }
     }
 

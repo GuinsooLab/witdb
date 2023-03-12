@@ -13,11 +13,14 @@
  */
 package io.trino.collect.cache;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Ticker;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.cache.Weigher;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.CheckReturnValue;
 import io.trino.collect.cache.EvictableCache.Token;
 import org.gaul.modernizer_maven_annotations.SuppressModernizer;
@@ -45,6 +48,7 @@ public final class EvictableCacheBuilder<K, V>
         return new EvictableCacheBuilder<>();
     }
 
+    private Optional<Ticker> ticker = Optional.empty();
     private Optional<Duration> expireAfterWrite = Optional.empty();
     private Optional<Duration> refreshAfterWrite = Optional.empty();
     private Optional<Long> maximumSize = Optional.empty();
@@ -55,11 +59,23 @@ public final class EvictableCacheBuilder<K, V>
 
     private EvictableCacheBuilder() {}
 
+    /**
+     * Pass-through for {@link CacheBuilder#ticker(Ticker)}.
+     */
+    @CanIgnoreReturnValue
+    public EvictableCacheBuilder<K, V> ticker(Ticker ticker)
+    {
+        this.ticker = Optional.of(ticker);
+        return this;
+    }
+
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> expireAfterWrite(long duration, TimeUnit unit)
     {
         return expireAfterWrite(toDuration(duration, unit));
     }
 
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> expireAfterWrite(Duration duration)
     {
         checkState(!this.expireAfterWrite.isPresent(), "expireAfterWrite already set");
@@ -67,11 +83,13 @@ public final class EvictableCacheBuilder<K, V>
         return this;
     }
 
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> refreshAfterWrite(long duration, TimeUnit unit)
     {
         return refreshAfterWrite(toDuration(duration, unit));
     }
 
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> refreshAfterWrite(Duration duration)
     {
         checkState(!this.refreshAfterWrite.isPresent(), "refreshAfterWrite already set");
@@ -79,6 +97,7 @@ public final class EvictableCacheBuilder<K, V>
         return this;
     }
 
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> maximumSize(long maximumSize)
     {
         checkState(!this.maximumSize.isPresent(), "maximumSize already set");
@@ -87,6 +106,7 @@ public final class EvictableCacheBuilder<K, V>
         return this;
     }
 
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> maximumWeight(long maximumWeight)
     {
         checkState(!this.maximumWeight.isPresent(), "maximumWeight already set");
@@ -104,6 +124,7 @@ public final class EvictableCacheBuilder<K, V>
         return cast;
     }
 
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> recordStats()
     {
         recordStats = true;
@@ -113,21 +134,27 @@ public final class EvictableCacheBuilder<K, V>
     /**
      * Choose a behavior for case when caching is disabled that may allow data and failure sharing between concurrent callers.
      */
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> shareResultsAndFailuresEvenIfDisabled()
     {
-        checkState(!disabledCacheImplementation.isPresent(), "disabledCacheImplementation already set");
-        disabledCacheImplementation = Optional.of(DisabledCacheImplementation.GUAVA);
-        return this;
+        return disabledCacheImplementation(DisabledCacheImplementation.GUAVA);
     }
 
     /**
      * Choose a behavior for case when caching is disabled that prevents data and failure sharing between concurrent callers.
      * Note: disabled cache won't report any statistics.
      */
+    @CanIgnoreReturnValue
     public EvictableCacheBuilder<K, V> shareNothingWhenDisabled()
     {
+        return disabledCacheImplementation(DisabledCacheImplementation.NOOP);
+    }
+
+    @VisibleForTesting
+    EvictableCacheBuilder<K, V> disabledCacheImplementation(DisabledCacheImplementation cacheImplementation)
+    {
         checkState(!disabledCacheImplementation.isPresent(), "disabledCacheImplementation already set");
-        disabledCacheImplementation = Optional.of(DisabledCacheImplementation.NOOP);
+        disabledCacheImplementation = Optional.of(cacheImplementation);
         return this;
     }
 
@@ -172,6 +199,7 @@ public final class EvictableCacheBuilder<K, V>
 
         // CacheBuilder is further modified in EvictableCache::new, so cannot be shared between build() calls.
         CacheBuilder<Object, ? super V> cacheBuilder = CacheBuilder.newBuilder();
+        ticker.ifPresent(cacheBuilder::ticker);
         expireAfterWrite.ifPresent(cacheBuilder::expireAfterWrite);
         refreshAfterWrite.ifPresent(cacheBuilder::refreshAfterWrite);
         maximumSize.ifPresent(cacheBuilder::maximumSize);
@@ -202,6 +230,7 @@ public final class EvictableCacheBuilder<K, V>
         });
     }
 
+    @ElementTypesAreNonnullByDefault
     private static final class TokenWeigher<K, V>
             implements Weigher<Token<K>, V>
     {
@@ -225,7 +254,8 @@ public final class EvictableCacheBuilder<K, V>
         return Duration.ofNanos(unit.toNanos(duration));
     }
 
-    private enum DisabledCacheImplementation
+    @VisibleForTesting
+    enum DisabledCacheImplementation
     {
         NOOP,
         GUAVA,

@@ -46,6 +46,10 @@ public class RewriteExactNumericConstant
     @Override
     public Optional<String> rewrite(Constant constant, Captures captures, RewriteContext<String> context)
     {
+        if (constant.getValue() == null) {
+            return Optional.empty();
+        }
+
         Type type = constant.getType();
         if (constant.getValue() == null) {
             return Optional.empty();
@@ -54,8 +58,7 @@ public class RewriteExactNumericConstant
             return Optional.of(Long.toString((long) constant.getValue()));
         }
 
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
+        if (type instanceof DecimalType decimalType) {
             if (decimalType.isShort()) {
                 return Optional.of(Decimals.toString((long) constant.getValue(), decimalType.getScale()));
             }

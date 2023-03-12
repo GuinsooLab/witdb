@@ -1327,14 +1327,14 @@ public abstract class AbstractTestAggregations
                         "WHERE orderkey IN (1, 2, 3, 4, 5) " +
                         "GROUP BY GROUPING SETS ((), (orderpriority), (orderpriority, custkey))",
                 "VALUES " +
-                        "(NULL, NULL , ('F', 'O', 'O'))," +
-                        "('5-LOW', NULL , ('F', 'O'))," +
-                        "('1-URGENT', NULL , ('O'))," +
+                        "(NULL, NULL , ARRAY['F', 'O', 'O'])," +
+                        "('5-LOW', NULL , ARRAY['F', 'O'])," +
+                        "('1-URGENT', NULL, ARRAY['O'])," +
                         "('5-LOW', 370 , NULL)," +
-                        "('5-LOW', 1234, ('F'))," +
-                        "('5-LOW', 1369, ('O'))," +
+                        "('5-LOW', 1234, ARRAY['F'])," +
+                        "('5-LOW', 1369, ARRAY['O'])," +
                         "('5-LOW', 445 , NULL)," +
-                        "('1-URGENT', 781 , ('O'))");
+                        "('1-URGENT', 781 , ARRAY['O'])");
     }
 
     @Test
@@ -1399,5 +1399,17 @@ public abstract class AbstractTestAggregations
         assertEquals(actual1.getMaterializedRows().get(1).getFields().get(1), ImmutableMap.of("B", 2L, "E", 1L));
         assertEquals(actual1.getMaterializedRows().get(2).getFields().get(0), "c");
         assertEquals(actual1.getMaterializedRows().get(2).getFields().get(1), ImmutableMap.of("C", 2L));
+    }
+
+    @Test
+    public void testLongDecimalAggregations()
+    {
+        assertQuery("""
+                SELECT avg(value_big), sum(value_big), avg(value_small), sum(value_small)
+                FROM (
+                    SELECT orderkey as id, CAST(power(2, 65) as DECIMAL(38, 0)) as value_big, CAST(1 as DECIMAL(38, 0)) as value_small
+                    FROM orders
+                    LIMIT 10)
+                GROUP BY id""");
     }
 }

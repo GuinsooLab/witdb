@@ -37,6 +37,8 @@ import org.testng.annotations.Test;
 import java.util.Optional;
 
 import static io.trino.SystemSessionProperties.PREFERRED_WRITE_PARTITIONING_MIN_NUMBER_OF_PARTITIONS;
+import static io.trino.SystemSessionProperties.TASK_PARTITIONED_WRITER_COUNT;
+import static io.trino.SystemSessionProperties.TASK_SCALE_WRITERS_ENABLED;
 import static io.trino.SystemSessionProperties.TASK_WRITER_COUNT;
 import static io.trino.SystemSessionProperties.USE_PREFERRED_WRITE_PARTITIONING;
 import static io.trino.spi.type.IntegerType.INTEGER;
@@ -276,6 +278,8 @@ public class TestInsert
         return Session.builder(getQueryRunner().getDefaultSession())
                 .setSystemProperty(USE_PREFERRED_WRITE_PARTITIONING, "true")
                 .setSystemProperty(PREFERRED_WRITE_PARTITIONING_MIN_NUMBER_OF_PARTITIONS, "1")
+                .setSystemProperty(TASK_SCALE_WRITERS_ENABLED, "false")
+                .setSystemProperty(TASK_PARTITIONED_WRITER_COUNT, "16")
                 .setSystemProperty(TASK_WRITER_COUNT, "16")
                 .build();
     }
@@ -285,6 +289,8 @@ public class TestInsert
         return Session.builder(getQueryRunner().getDefaultSession())
                 .setSystemProperty(USE_PREFERRED_WRITE_PARTITIONING, "true")
                 .setSystemProperty(PREFERRED_WRITE_PARTITIONING_MIN_NUMBER_OF_PARTITIONS, "2")
+                .setSystemProperty(TASK_SCALE_WRITERS_ENABLED, "false")
+                .setSystemProperty(TASK_PARTITIONED_WRITER_COUNT, "16")
                 .setSystemProperty(TASK_WRITER_COUNT, "16")
                 .build();
     }
@@ -293,7 +299,9 @@ public class TestInsert
     {
         return Session.builder(getQueryRunner().getDefaultSession())
                 .setSystemProperty(USE_PREFERRED_WRITE_PARTITIONING, "false")
+                .setSystemProperty(TASK_SCALE_WRITERS_ENABLED, "false")
                 .setSystemProperty(TASK_WRITER_COUNT, "16")
+                .setSystemProperty(TASK_PARTITIONED_WRITER_COUNT, "2") // force parallel plan even on test nodes with single CPU
                 .build();
     }
 }

@@ -16,7 +16,6 @@ package io.trino.spi.block;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
-import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 
@@ -24,9 +23,11 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.function.ObjLongConsumer;
 
+import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.airlift.slice.Slices.EMPTY_SLICE;
 import static io.trino.spi.block.BlockUtil.checkArrayRange;
+import static io.trino.spi.block.BlockUtil.checkReadablePosition;
 import static io.trino.spi.block.BlockUtil.checkValidRegion;
 import static io.trino.spi.block.BlockUtil.compactArray;
 import static io.trino.spi.block.BlockUtil.compactOffsets;
@@ -37,7 +38,7 @@ import static io.trino.spi.block.BlockUtil.copyOffsetsAndAppendNull;
 public class VariableWidthBlock
         extends AbstractVariableWidthBlock
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(VariableWidthBlock.class).instanceSize();
+    private static final int INSTANCE_SIZE = instanceSize(VariableWidthBlock.class);
 
     private final int arrayOffset;
     private final int positionCount;
@@ -84,6 +85,23 @@ public class VariableWidthBlock
         retainedSizeInBytes = INSTANCE_SIZE + slice.getRetainedSize() + sizeOf(valueIsNull) + sizeOf(offsets);
     }
 
+    /**
+     * Gets the raw {@link Slice} that keeps the actual data bytes.
+     */
+    public Slice getRawSlice()
+    {
+        return slice;
+    }
+
+    /**
+     * Gets the offset of the value at the {@code position} in the {@link Slice} returned by {@link #getRawSlice()}.
+     */
+    public int getRawSliceOffset(int position)
+    {
+        checkReadablePosition(this, position);
+        return getPositionOffset(position);
+    }
+
     @Override
     protected final int getPositionOffset(int position)
     {
@@ -93,7 +111,7 @@ public class VariableWidthBlock
     @Override
     public int getSliceLength(int position)
     {
-        checkReadablePosition(position);
+        checkReadablePosition(this, position);
         return getPositionOffset(position + 1) - getPositionOffset(position);
     }
 
@@ -165,7 +183,7 @@ public class VariableWidthBlock
         if (valueIsNull != null) {
             consumer.accept(valueIsNull, sizeOf(valueIsNull));
         }
-        consumer.accept(this, (long) INSTANCE_SIZE);
+        consumer.accept(this, INSTANCE_SIZE);
     }
 
     @Override

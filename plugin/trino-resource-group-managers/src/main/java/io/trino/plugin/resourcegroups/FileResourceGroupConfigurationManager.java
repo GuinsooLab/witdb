@@ -71,8 +71,6 @@ public class FileResourceGroupConfigurationManager
     @VisibleForTesting
     static ManagerSpec parseManagerSpec(FileResourceGroupConfig config)
     {
-        requireNonNull(config, "config is null");
-
         ManagerSpec managerSpec;
         try {
             managerSpec = CODEC.fromJson(Files.readAllBytes(Paths.get(config.getConfigFile())));
@@ -82,8 +80,7 @@ public class FileResourceGroupConfigurationManager
         }
         catch (IllegalArgumentException e) {
             Throwable cause = e.getCause();
-            if (cause instanceof UnrecognizedPropertyException) {
-                UnrecognizedPropertyException ex = (UnrecognizedPropertyException) cause;
+            if (cause instanceof UnrecognizedPropertyException ex) {
                 String message = format("Unknown property at line %s:%s: %s",
                         ex.getLocation().getLineNr(),
                         ex.getLocation().getColumnNr(),

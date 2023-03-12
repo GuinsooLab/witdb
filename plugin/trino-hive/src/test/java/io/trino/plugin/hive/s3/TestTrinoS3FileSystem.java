@@ -40,6 +40,9 @@ import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClient;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.ListenableFuture;
+import io.trino.memory.context.AggregatedMemoryContext;
+import io.trino.memory.context.MemoryReservationHandler;
 import io.trino.plugin.hive.s3.TrinoS3FileSystem.UnrecoverableS3OperationException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -56,6 +59,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.SequenceInputStream;
 import java.lang.reflect.Field;
 import java.net.URI;
@@ -74,6 +78,7 @@ import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.airlift.testing.Assertions.assertInstanceOf;
 import static io.trino.hadoop.ConfigurationInstantiator.newEmptyConfiguration;
+import static io.trino.memory.context.AggregatedMemoryContext.newRootAggregatedMemoryContext;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_ACCESS_KEY;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_ACL_TYPE;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_CREDENTIALS_PROVIDER;
@@ -87,6 +92,7 @@ import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_MAX_CLIENT_RETRIES;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_MAX_RETRY_TIME;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_PATH_STYLE_ACCESS;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_PIN_CLIENT_TO_CURRENT_REGION;
+import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_REGION;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_SECRET_KEY;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_SESSION_TOKEN;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_SKIP_GLACIER_OBJECTS;
@@ -168,6 +174,35 @@ public class TestTrinoS3FileSystem
         config.set(S3_PIN_CLIENT_TO_CURRENT_REGION, "true");
         try (TrinoS3FileSystem fs = new TrinoS3FileSystem()) {
             fs.initialize(new URI("s3a://test-bucket/"), config);
+        }
+    }
+
+    @Test
+    public void testEndpointWithExplicitRegionConfiguration()
+            throws Exception
+    {
+        Configuration config = newEmptyConfiguration();
+
+        // Only endpoint set
+        config.set(S3_ENDPOINT, "test.example.endpoint.com");
+        try (TrinoS3FileSystem fs = new TrinoS3FileSystem()) {
+            fs.initialize(new URI("s3a://test-bucket/"), config);
+            assertThat(((AmazonS3Client) fs.getS3Client()).getSignerRegionOverride()).isNull();
+        }
+
+        // Endpoint and region set
+        config.set(S3_ENDPOINT, "test.example.endpoint.com");
+        config.set(S3_REGION, "region1");
+        try (TrinoS3FileSystem fs = new TrinoS3FileSystem()) {
+            fs.initialize(new URI("s3a://test-bucket/"), config);
+            assertThat(((AmazonS3Client) fs.getS3Client()).getSignerRegionOverride()).isEqualTo("region1");
+        }
+
+        // Only region set
+        config.set(S3_REGION, "region1");
+        try (TrinoS3FileSystem fs = new TrinoS3FileSystem()) {
+            fs.initialize(new URI("s3a://test-bucket/"), config);
+            assertThat(((AmazonS3Client) fs.getS3Client()).getSignerRegionOverride()).isEqualTo("region1");
         }
     }
 
@@ -812,18 +847,19 @@ public class TestTrinoS3FileSystem
     {
         Configuration config = newEmptyConfiguration();
         config.set(S3_STREAMING_UPLOAD_ENABLED, "true");
-        config.set(S3_STREAMING_UPLOAD_PART_SIZE, "10");
 
         try (TrinoS3FileSystem fs = new TrinoS3FileSystem()) {
             MockAmazonS3 s3 = new MockAmazonS3();
             String expectedBucketName = "test-bucket";
+            config.set(S3_STREAMING_UPLOAD_PART_SIZE, "128");
             fs.initialize(new URI("s3n://" + expectedBucketName + "/"), config);
             fs.setS3Client(s3);
-            try (FSDataOutputStream stream = fs.create(new Path("s3n://test-bucket/test"))) {
+            String objectKey = "test";
+            try (FSDataOutputStream stream = fs.create(new Path("s3n://test-bucket/" + objectKey))) {
                 stream.write('a');
-                stream.write("foo".repeat(2).getBytes(US_ASCII));
-                stream.write("bar".repeat(3).getBytes(US_ASCII));
-                stream.write("orange".repeat(4).getBytes(US_ASCII), 6, 12);
+                stream.write("foo".repeat(21).getBytes(US_ASCII)); // 63 bytes = "foo" * 21
+                stream.write("bar".repeat(44).getBytes(US_ASCII)); // 132 bytes = "bar" * 44
+                stream.write("orange".repeat(25).getBytes(US_ASCII), 6, 132); // 132 bytes = "orange" * 22
             }
 
             List<UploadPartRequest> parts = s3.getUploadParts();
@@ -833,7 +869,7 @@ public class TestTrinoS3FileSystem
                     .map(UploadPartRequest::getInputStream)
                     .reduce(new ByteArrayInputStream(new byte[0]), SequenceInputStream::new);
             String data = new String(toByteArray(concatInputStream), US_ASCII);
-            assertEquals(data, "afoofoobarbarbarorangeorange");
+            assertEquals(data, "a" + "foo".repeat(21) + "bar".repeat(44) + "orange".repeat(22));
         }
     }
 
@@ -923,6 +959,25 @@ public class TestTrinoS3FileSystem
         }
     }
 
+    @Test
+    public void testThatTrinoS3FileSystemReportsConsumedMemory()
+            throws IOException
+    {
+        TestMemoryReservationHandler memoryReservationHandler = new TestMemoryReservationHandler();
+        AggregatedMemoryContext memoryContext = newRootAggregatedMemoryContext(memoryReservationHandler, 1024 * 1000 * 1000);
+        try (TrinoS3FileSystem fs = new TrinoS3FileSystem()) {
+            MockAmazonS3 s3 = new MockAmazonS3();
+            Path rootPath = new Path("s3n://test-bucket/");
+            fs.initialize(rootPath.toUri(), newEmptyConfiguration());
+            fs.setS3Client(s3);
+            OutputStream outputStream = fs.create(new Path("s3n://test-bucket/test1"), memoryContext);
+            outputStream.write(new byte[] {1, 2, 3, 4, 5, 6}, 0, 6);
+            outputStream.close();
+        }
+        assertThat(memoryReservationHandler.getReserved()).isEqualTo(0);
+        assertThat(memoryReservationHandler.getMaxReserved()).isGreaterThan(0);
+    }
+
     private static List<LocatedFileStatus> remoteIteratorToList(RemoteIterator<LocatedFileStatus> statuses)
             throws IOException
     {
@@ -931,5 +986,42 @@ public class TestTrinoS3FileSystem
             result.add(statuses.next());
         }
         return result;
+    }
+
+    private static class TestMemoryReservationHandler
+            implements MemoryReservationHandler
+    {
+        private long reserved;
+        private long maxReserved;
+
+        @Override
+        public ListenableFuture<Void> reserveMemory(String allocationTag, long delta)
+        {
+            reserved += delta;
+            if (delta > maxReserved) {
+                maxReserved = delta;
+            }
+            return null;
+        }
+
+        @Override
+        public boolean tryReserveMemory(String allocationTag, long delta)
+        {
+            reserved += delta;
+            if (delta > maxReserved) {
+                maxReserved = delta;
+            }
+            return true;
+        }
+
+        public long getReserved()
+        {
+            return reserved;
+        }
+
+        public long getMaxReserved()
+        {
+            return maxReserved;
+        }
     }
 }

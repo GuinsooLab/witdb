@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.trino</groupId>
         <artifactId>trino-root</artifactId>
-        <version>391-SNAPSHOT</version>
+        <version>411-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -30,6 +30,16 @@
         <dependency>
             <groupId>io.trino</groupId>
             <artifactId>trino-collect</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-filesystem</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-hdfs</artifactId>
         </dependency>
 
         <dependency>
@@ -123,14 +133,15 @@
         </dependency>
 
         <dependency>
-            <groupId>com.google.code.findbugs</groupId>
-            <artifactId>jsr305</artifactId>
-            <optional>true</optional>
+            <groupId>com.google.cloud.bigdataoss</groupId>
+            <artifactId>gcs-connector</artifactId>
+            <classifier>shaded</classifier>
         </dependency>
 
         <dependency>
-            <groupId>com.google.errorprone</groupId>
-            <artifactId>error_prone_annotations</artifactId>
+            <groupId>com.google.code.findbugs</groupId>
+            <artifactId>jsr305</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <dependency>
@@ -141,6 +152,11 @@
         <dependency>
             <groupId>com.google.inject</groupId>
             <artifactId>guice</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>dev.failsafe</groupId>
+            <artifactId>failsafe</artifactId>
         </dependency>
 
         <dependency>
@@ -159,8 +175,13 @@
         </dependency>
 
         <dependency>
-            <groupId>net.jodah</groupId>
-            <artifactId>failsafe</artifactId>
+            <groupId>org.antlr</groupId>
+            <artifactId>antlr4-runtime</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
         </dependency>
 
         <dependency>
@@ -178,6 +199,12 @@
         <dependency>
             <groupId>io.airlift</groupId>
             <artifactId>log-manager</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.google.errorprone</groupId>
+            <artifactId>error_prone_annotations</artifactId>
             <scope>runtime</scope>
         </dependency>
 
@@ -207,6 +234,19 @@
         </dependency>
 
         <!-- for testing -->
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-exchange-filesystem</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-exchange-filesystem</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>io.trino</groupId>
             <artifactId>trino-hive</artifactId>
@@ -278,6 +318,12 @@
 
         <dependency>
             <groupId>io.trino</groupId>
+            <artifactId>trino-tpcds</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
             <artifactId>trino-tpch</artifactId>
             <scope>test</scope>
         </dependency>
@@ -321,7 +367,6 @@
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-api</artifactId>
-            <version>${dep.docker-java.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -369,6 +414,40 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.basepom.maven</groupId>
+                <artifactId>duplicate-finder-maven-plugin</artifactId>
+                <configuration>
+                    <ignoredResourcePatterns>
+                        <!-- com.amazonaws:aws-java-sdk-core and software.amazon.awssdk:sdk-core MIME type file duplicate-->
+                        <ignoredResourcePattern>mime.types</ignoredResourcePattern>
+                        <ignoredResourcePattern>about.html</ignoredResourcePattern>
+                    </ignoredResourcePatterns>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <configuration>
+                    <ignoredNonTestScopedDependencies>
+                        <!-- dependency plugin fails to recognize aws-java-sdk-core as a compile-time dependency, because
+                             we only explicitly use a class from aws-java-sdk-glue, which in turn extends from a class from
+                             aws-java-sdk-core -->
+                        <ignoredDependency>com.amazonaws:aws-java-sdk-core</ignoredDependency>
+                        <ignoredDependency>org.apache.iceberg:iceberg-api</ignoredDependency>
+                    </ignoredNonTestScopedDependencies>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
     <profiles>
         <profile>
             <id>default</id>
@@ -386,32 +465,16 @@
                                 <exclude>**/TestDeltaLakeAdlsConnectorSmokeTest.java</exclude>
                                 <exclude>**/TestDeltaLakeGlueMetastore.java</exclude>
                                 <exclude>**/TestDeltaLakeCleanUpGlueMetastore.java</exclude>
+                                <exclude>**/TestDeltaLakeSharedGlueMetastoreViews.java</exclude>
                                 <exclude>**/TestDeltaLakeSharedGlueMetastoreWithTableRedirections.java</exclude>
+                                <exclude>**/TestDeltaLakeTableWithCustomLocationUsingGlueMetastore.java</exclude>
+                                <exclude>**/TestDeltaLakeRenameToWithGlueMetastore.java</exclude>
+                                <exclude>**/TestDeltaLakeRegisterTableProcedureWithGlue.java</exclude>
+                                <exclude>**/TestDeltaLakeViewsGlueMetastore.java</exclude>
+                                <exclude>**/TestDeltaLakeConcurrentModificationGlueMetastore.java</exclude>
+                                <exclude>**/TestDeltaLakeGcsConnectorSmokeTest.java</exclude>
+                                <exclude>**/Test*FailureRecoveryTest.java</exclude>
                             </excludes>
-                        </configuration>
-                    </plugin>
-
-                    <plugin>
-                        <groupId>org.basepom.maven</groupId>
-                        <artifactId>duplicate-finder-maven-plugin</artifactId>
-                        <configuration>
-                            <ignoredResourcePatterns>
-                                <!-- com.amazonaws:aws-java-sdk-core and software.amazon.awssdk:sdk-core MIME type file duplicate-->
-                                <ignoredResourcePattern>mime.types</ignoredResourcePattern>
-                                <ignoredResourcePattern>about.html</ignoredResourcePattern>
-                            </ignoredResourcePatterns>
-                        </configuration>
-                    </plugin>
-
-                    <plugin>
-                        <artifactId>maven-dependency-plugin</artifactId>
-                        <configuration>
-                            <ignoredNonTestScopedDependencies>
-                                <!-- dependency plugin fails to recognize aws-java-sdk-core as a compile-time dependency, because
-                                     we only explicitly use a class from aws-java-sdk-glue, which in turn extends from a class from
-                                     aws-java-sdk-core -->
-                                <ignoredDependency>com.amazonaws:aws-java-sdk-core</ignoredDependency>
-                            </ignoredNonTestScopedDependencies>
                         </configuration>
                     </plugin>
                 </plugins>
@@ -419,6 +482,7 @@
         </profile>
 
         <profile>
+	    <!-- Tests which require third party cloud services are separated from the main test profile -->
             <id>cloud-tests</id>
             <build>
                 <plugins>
@@ -431,7 +495,47 @@
                                 <include>**/TestDeltaLakeAdlsConnectorSmokeTest.java</include>
                                 <include>**/TestDeltaLakeGlueMetastore.java</include>
                                 <include>**/TestDeltaLakeCleanUpGlueMetastore.java</include>
+                                <include>**/TestDeltaLakeSharedGlueMetastoreViews.java</include>
                                 <include>**/TestDeltaLakeSharedGlueMetastoreWithTableRedirections.java</include>
+                                <include>**/TestDeltaLakeTableWithCustomLocationUsingGlueMetastore.java</include>
+                                <include>**/TestDeltaLakeRenameToWithGlueMetastore.java</include>
+                                <include>**/TestDeltaLakeRegisterTableProcedureWithGlue.java</include>
+                                <include>**/TestDeltaLakeViewsGlueMetastore.java</include>
+                                <include>**/TestDeltaLakeConcurrentModificationGlueMetastore.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>fte-tests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/Test*FailureRecoveryTest.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>gcs-tests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/TestDeltaLakeGcsConnectorSmokeTest.java</include>
                             </includes>
                         </configuration>
                     </plugin>

@@ -110,7 +110,7 @@ public class QueryRewriter
             if (statement instanceof CreateTableAsSelect) {
                 return rewriteCreateTableAsSelect(connection, query, (CreateTableAsSelect) statement);
             }
-            else if (statement instanceof Insert) {
+            if (statement instanceof Insert) {
                 return rewriteInsertQuery(connection, query, (Insert) statement);
             }
         }
@@ -195,8 +195,7 @@ public class QueryRewriter
         // Rewrite the query to select zero rows, so that we can get the column names and types
         QueryBody innerQuery = createSelectClause.getQueryBody();
         io.trino.sql.tree.Query zeroRowsQuery;
-        if (innerQuery instanceof QuerySpecification) {
-            QuerySpecification querySpecification = (QuerySpecification) innerQuery;
+        if (innerQuery instanceof QuerySpecification querySpecification) {
             innerQuery = new QuerySpecification(
                     querySpecification.getSelect(),
                     querySpecification.getFrom(),

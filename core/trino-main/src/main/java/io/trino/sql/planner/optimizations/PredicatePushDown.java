@@ -18,9 +18,9 @@ import com.google.common.collect.HashBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Sets;
 import com.google.common.collect.Streams;
 import io.trino.Session;
+import io.trino.cost.TableStatsProvider;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.Metadata;
 import io.trino.spi.type.Type;
@@ -143,7 +143,7 @@ public class PredicatePushDown
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector, TableStatsProvider tableStatsProvider)
     {
         requireNonNull(plan, "plan is null");
         requireNonNull(session, "session is null");
@@ -257,8 +257,7 @@ public class PredicatePushDown
             // pre-projected symbols.
             Predicate<Expression> isSupported = conjunct ->
                     isDeterministic(conjunct, metadata) &&
-                            extractUnique(conjunct).stream()
-                                    .allMatch(partitionSymbols::contains);
+                            partitionSymbols.containsAll(extractUnique(conjunct));
 
             Map<Boolean, List<Expression>> conjuncts = extractConjuncts(context.get()).stream().collect(Collectors.partitioningBy(isSupported));
 
@@ -279,8 +278,7 @@ public class PredicatePushDown
                     .map(Map.Entry::getKey)
                     .collect(Collectors.toSet());
 
-            Predicate<Expression> deterministic = conjunct -> extractUnique(conjunct).stream()
-                    .allMatch(deterministicSymbols::contains);
+            Predicate<Expression> deterministic = conjunct -> deterministicSymbols.containsAll(extractUnique(conjunct));
 
             Map<Boolean, List<Expression>> conjuncts = extractConjuncts(context.get()).stream().collect(Collectors.partitioningBy(deterministic));
 
@@ -362,7 +360,7 @@ public class PredicatePushDown
         {
             Set<Symbol> pushDownableSymbols = ImmutableSet.copyOf(node.getDistinctSymbols());
             Map<Boolean, List<Expression>> conjuncts = extractConjuncts(context.get()).stream()
-                    .collect(Collectors.partitioningBy(conjunct -> extractUnique(conjunct).stream().allMatch(pushDownableSymbols::contains)));
+                    .collect(Collectors.partitioningBy(conjunct -> pushDownableSymbols.containsAll(extractUnique(conjunct))));
 
             PlanNode rewrittenNode = context.defaultRewrite(node, combineConjuncts(metadata, conjuncts.get(true)));
 
@@ -405,11 +403,10 @@ public class PredicatePushDown
         public PlanNode visitFilter(FilterNode node, RewriteContext<Expression> context)
         {
             PlanNode rewrittenPlan = context.rewrite(node.getSource(), combineConjuncts(metadata, node.getPredicate(), context.get()));
-            if (!(rewrittenPlan instanceof FilterNode)) {
+            if (!(rewrittenPlan instanceof FilterNode rewrittenFilterNode)) {
                 return rewrittenPlan;
             }
 
-            FilterNode rewrittenFilterNode = (FilterNode) rewrittenPlan;
             if (!areExpressionsEquivalent(rewrittenFilterNode.getPredicate(), node.getPredicate())
                     || node.getSource() != rewrittenFilterNode.getSource()) {
                 return rewrittenPlan;
@@ -436,7 +433,7 @@ public class PredicatePushDown
             Expression newJoinPredicate;
 
             switch (node.getType()) {
-                case INNER:
+                case INNER -> {
                     InnerJoinPushDownResult innerJoinPushDownResult = processInnerJoin(
                             inheritedPredicate,
                             leftEffectivePredicate,
@@ -448,8 +445,8 @@ public class PredicatePushDown
                     rightPredicate = innerJoinPushDownResult.getRightPredicate();
                     postJoinPredicate = innerJoinPushDownResult.getPostJoinPredicate();
                     newJoinPredicate = innerJoinPushDownResult.getJoinPredicate();
-                    break;
-                case LEFT:
+                }
+                case LEFT -> {
                     OuterJoinPushDownResult leftOuterJoinPushDownResult = processLimitedOuterJoin(
                             inheritedPredicate,
                             leftEffectivePredicate,
@@ -461,8 +458,8 @@ public class PredicatePushDown
                     rightPredicate = leftOuterJoinPushDownResult.getInnerJoinPredicate();
                     postJoinPredicate = leftOuterJoinPushDownResult.getPostJoinPredicate();
                     newJoinPredicate = leftOuterJoinPushDownResult.getJoinPredicate();
-                    break;
-                case RIGHT:
+                }
+                case RIGHT -> {
                     OuterJoinPushDownResult rightOuterJoinPushDownResult = processLimitedOuterJoin(
                             inheritedPredicate,
                             rightEffectivePredicate,
@@ -474,15 +471,14 @@ public class PredicatePushDown
                     rightPredicate = rightOuterJoinPushDownResult.getOuterJoinPredicate();
                     postJoinPredicate = rightOuterJoinPushDownResult.getPostJoinPredicate();
                     newJoinPredicate = rightOuterJoinPushDownResult.getJoinPredicate();
-                    break;
-                case FULL:
+                }
+                case FULL -> {
                     leftPredicate = TRUE_LITERAL;
                     rightPredicate = TRUE_LITERAL;
                     postJoinPredicate = inheritedPredicate;
                     newJoinPredicate = joinPredicate;
-                    break;
-                default:
-                    throw new UnsupportedOperationException("Unsupported join type: " + node.getType());
+                }
+                default -> throw new UnsupportedOperationException("Unsupported join type: " + node.getType());
             }
 
             newJoinPredicate = simplifyExpression(newJoinPredicate);
@@ -544,7 +540,7 @@ public class PredicatePushDown
             }
 
             Optional<Expression> newJoinFilter = Optional.of(combineConjuncts(metadata, joinFilter));
-            if (newJoinFilter.get() == TRUE_LITERAL) {
+            if (newJoinFilter.get().equals(TRUE_LITERAL)) {
                 newJoinFilter = Optional.empty();
             }
 
@@ -620,8 +616,7 @@ public class PredicatePushDown
                                     .flatMap(Rewriter::tryConvertBetweenIntoComparisons)
                                     .filter(clause -> joinDynamicFilteringExpression(clause, node.getLeft().getOutputSymbols(), node.getRight().getOutputSymbols()))
                                     .map(expression -> {
-                                        if (expression instanceof NotExpression) {
-                                            NotExpression notExpression = ((NotExpression) expression);
+                                        if (expression instanceof NotExpression notExpression) {
                                             ComparisonExpression comparison = (ComparisonExpression) notExpression.getValue();
                                             return new DynamicFilterExpression(new ComparisonExpression(EQUAL, comparison.getLeft(), comparison.getRight()), true);
                                         }
@@ -680,8 +675,7 @@ public class PredicatePushDown
 
         private static Stream<Expression> tryConvertBetweenIntoComparisons(Expression clause)
         {
-            if (clause instanceof BetweenPredicate) {
-                BetweenPredicate between = (BetweenPredicate) clause;
+            if (clause instanceof BetweenPredicate between) {
                 return Stream.of(
                         new ComparisonExpression(GREATER_THAN_OR_EQUAL, between.getValue(), between.getMin()),
                         new ComparisonExpression(LESS_THAN_OR_EQUAL, between.getValue(), between.getMax()));
@@ -758,7 +752,7 @@ public class PredicatePushDown
             Expression newJoinPredicate;
 
             switch (node.getType()) {
-                case INNER:
+                case INNER -> {
                     InnerJoinPushDownResult innerJoinPushDownResult = processInnerJoin(
                             inheritedPredicate,
                             leftEffectivePredicate,
@@ -770,8 +764,8 @@ public class PredicatePushDown
                     rightPredicate = innerJoinPushDownResult.getRightPredicate();
                     postJoinPredicate = innerJoinPushDownResult.getPostJoinPredicate();
                     newJoinPredicate = innerJoinPushDownResult.getJoinPredicate();
-                    break;
-                case LEFT:
+                }
+                case LEFT -> {
                     OuterJoinPushDownResult leftOuterJoinPushDownResult = processLimitedOuterJoin(
                             inheritedPredicate,
                             leftEffectivePredicate,
@@ -783,9 +777,8 @@ public class PredicatePushDown
                     rightPredicate = leftOuterJoinPushDownResult.getInnerJoinPredicate();
                     postJoinPredicate = leftOuterJoinPushDownResult.getPostJoinPredicate();
                     newJoinPredicate = leftOuterJoinPushDownResult.getJoinPredicate();
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unsupported spatial join type: " + node.getType());
+                }
+                default -> throw new IllegalArgumentException("Unsupported spatial join type: " + node.getType());
             }
 
             newJoinPredicate = simplifyExpression(newJoinPredicate);
@@ -1011,10 +1004,6 @@ public class PredicatePushDown
             Expression simplifiedLeftEffectivePredicate = predicateInference.rewrite(leftEffectivePredicate, leftScope);
             Expression simplifiedRightEffectivePredicate = predicateInference.rewrite(rightEffectivePredicate, rightScope);
 
-            // simplify predicate based on known equalities guaranteed by the left/right side
-            EqualityInference assertions = EqualityInference.newInstance(metadata, leftEffectivePredicate, rightEffectivePredicate);
-            inheritedPredicate = assertions.rewrite(inheritedPredicate, Sets.union(leftScope, rightScope));
-
             // Generate equality inferences
             EqualityInference allInference = EqualityInference.newInstance(metadata, inheritedPredicate, leftEffectivePredicate, rightEffectivePredicate, joinPredicate, simplifiedLeftEffectivePredicate, simplifiedRightEffectivePredicate);
             EqualityInference allInferenceWithoutLeftInferred = EqualityInference.newInstance(metadata, inheritedPredicate, rightEffectivePredicate, joinPredicate, simplifiedRightEffectivePredicate);
@@ -1157,24 +1146,22 @@ public class PredicatePushDown
                             node.getDynamicFilters(),
                             node.getReorderJoinStatsAndCost());
                 }
-                else {
-                    return new JoinNode(
-                            node.getId(),
-                            canConvertToLeftJoin ? LEFT : RIGHT,
-                            node.getLeft(),
-                            node.getRight(),
-                            node.getCriteria(),
-                            node.getLeftOutputSymbols(),
-                            node.getRightOutputSymbols(),
-                            node.isMaySkipOutputDuplicates(),
-                            node.getFilter(),
-                            node.getLeftHashSymbol(),
-                            node.getRightHashSymbol(),
-                            node.getDistributionType(),
-                            node.isSpillable(),
-                            node.getDynamicFilters(),
-                            node.getReorderJoinStatsAndCost());
-                }
+                return new JoinNode(
+                        node.getId(),
+                        canConvertToLeftJoin ? LEFT : RIGHT,
+                        node.getLeft(),
+                        node.getRight(),
+                        node.getCriteria(),
+                        node.getLeftOutputSymbols(),
+                        node.getRightOutputSymbols(),
+                        node.isMaySkipOutputDuplicates(),
+                        node.getFilter(),
+                        node.getLeftHashSymbol(),
+                        node.getRightHashSymbol(),
+                        node.getDistributionType(),
+                        node.isSpillable(),
+                        node.getDynamicFilters(),
+                        node.getReorderJoinStatsAndCost());
             }
 
             if (node.getType() == JoinNode.Type.LEFT && !canConvertOuterToInner(node.getRight().getOutputSymbols(), inheritedPredicate) ||
@@ -1248,8 +1235,7 @@ public class PredicatePushDown
         private boolean joinDynamicFilteringExpression(Expression expression, Collection<Symbol> leftSymbols, Collection<Symbol> rightSymbols)
         {
             ComparisonExpression comparison;
-            if (expression instanceof NotExpression) {
-                NotExpression notExpression = (NotExpression) expression;
+            if (expression instanceof NotExpression notExpression) {
                 boolean isDistinctFrom = joinComparisonExpression(notExpression.getValue(), leftSymbols, rightSymbols, ImmutableSet.of(IS_DISTINCT_FROM));
                 if (!isDistinctFrom) {
                     return false;
@@ -1278,8 +1264,7 @@ public class PredicatePushDown
         private boolean joinComparisonExpression(Expression expression, Collection<Symbol> leftSymbols, Collection<Symbol> rightSymbols, Set<ComparisonExpression.Operator> operators)
         {
             // At this point in time, our join predicates need to be deterministic
-            if (expression instanceof ComparisonExpression && isDeterministic(expression, metadata)) {
-                ComparisonExpression comparison = (ComparisonExpression) expression;
+            if (expression instanceof ComparisonExpression comparison && isDeterministic(expression, metadata)) {
                 if (operators.contains(comparison.getOperator())) {
                     Set<Symbol> symbols1 = extractUnique(comparison.getLeft());
                     Set<Symbol> symbols2 = extractUnique(comparison.getRight());
@@ -1409,7 +1394,7 @@ public class PredicatePushDown
                     .filter(Objects::nonNull)
                     .forEach(sourceConjuncts::add);
 
-            // See if we can push the source effective predicate to the filtering soruce side
+            // See if we can push the source effective predicate to the filtering source side
             EqualityInference.nonInferrableConjuncts(metadata, sourceEffectivePredicate)
                     .map(conjunct -> allInference.rewrite(conjunct, filterScope))
                     .filter(Objects::nonNull)

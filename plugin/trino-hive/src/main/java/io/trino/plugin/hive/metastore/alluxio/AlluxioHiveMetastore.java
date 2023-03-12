@@ -20,8 +20,10 @@ import alluxio.grpc.table.ColumnStatisticsInfo;
 import alluxio.grpc.table.Constraint;
 import alluxio.grpc.table.TableInfo;
 import alluxio.grpc.table.layout.hive.PartitionInfo;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.trino.plugin.hive.HiveBasicStatistics;
+import io.trino.plugin.hive.HiveColumnStatisticType;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.PartitionStatistics;
 import io.trino.plugin.hive.acid.AcidTransaction;
@@ -41,7 +43,6 @@ import io.trino.plugin.hive.metastore.thrift.ThriftMetastoreUtil;
 import io.trino.spi.TrinoException;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
-import io.trino.spi.statistics.ColumnStatisticType;
 import io.trino.spi.type.Type;
 
 import java.util.ArrayList;
@@ -59,9 +60,9 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static io.trino.plugin.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
 import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreUtil.getHiveBasicStatistics;
+import static io.trino.plugin.hive.util.HiveUtil.makePartName;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.util.Objects.requireNonNull;
-import static org.apache.hadoop.hive.common.FileUtils.makePartName;
 
 /**
  * Implementation of the {@link HiveMetastore} interface through Alluxio.
@@ -74,7 +75,6 @@ public class AlluxioHiveMetastore
     public AlluxioHiveMetastore(TableMasterClient client, HiveMetastoreConfig hiveMetastoreConfig)
     {
         this.client = requireNonNull(client, "client is null");
-        requireNonNull(hiveMetastoreConfig, "hiveMetastoreConfig is null");
         checkArgument(!hiveMetastoreConfig.isHideDeltaLakeTables(), "Hiding Delta Lake tables is not supported"); // TODO
     }
 
@@ -115,7 +115,7 @@ public class AlluxioHiveMetastore
     }
 
     @Override
-    public Set<ColumnStatisticType> getSupportedColumnStatistics(Type type)
+    public Set<HiveColumnStatisticType> getSupportedColumnStatistics(Type type)
     {
         return ThriftMetastoreUtil.getSupportedColumnStatistics(type);
     }
@@ -161,7 +161,7 @@ public class AlluxioHiveMetastore
                     .collect(toImmutableMap(Map.Entry::getKey, entry -> entry.getValue().getRowCount()));
 
             Map<String, List<ColumnStatisticsInfo>> colStatsMap = client.getPartitionColumnStatistics(table.getDatabaseName(), table.getTableName(),
-                    partitionBasicStatistics.keySet().stream().collect(toImmutableList()), dataColumns);
+                    ImmutableList.copyOf(partitionBasicStatistics.keySet()), dataColumns);
             Map<String, Map<String, HiveColumnStatistics>> partitionColumnStatistics = colStatsMap.entrySet().stream()
                     .filter(entry -> !entry.getValue().isEmpty())
                     .collect(toImmutableMap(

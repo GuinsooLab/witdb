@@ -17,6 +17,7 @@ package io.trino.memory;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.stats.TDigest;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.trino.execution.TaskId;
@@ -25,7 +26,9 @@ import io.trino.execution.TaskState;
 import io.trino.execution.TaskStatus;
 import io.trino.execution.buffer.BufferState;
 import io.trino.execution.buffer.OutputBufferInfo;
+import io.trino.execution.buffer.OutputBufferStatus;
 import io.trino.operator.TaskStats;
+import io.trino.plugin.base.metrics.TDigestHistogram;
 import org.joda.time.DateTime;
 import org.testng.annotations.Test;
 
@@ -36,9 +39,9 @@ import java.util.Optional;
 import static io.trino.memory.LowMemoryKillerTestingUtils.taskId;
 import static io.trino.memory.LowMemoryKillerTestingUtils.toNodeMemoryInfoList;
 import static io.trino.memory.LowMemoryKillerTestingUtils.toRunningQueryInfoList;
-import static io.trino.testing.assertions.Assert.assertEquals;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.testng.Assert.assertEquals;
 
 public class TestLeastWastedEffortTaskLowMemoryKiller
 {
@@ -48,9 +51,9 @@ public class TestLeastWastedEffortTaskLowMemoryKiller
     public void testMemoryPoolHasNoReservation()
     {
         int memoryPool = 12;
-        Map<String, Map<String, Long>> queries = ImmutableMap.<String, Map<String, Long>>builder()
-                .put("q_1", ImmutableMap.of("n1", 0L, "n2", 0L, "n3", 0L, "n4", 0L, "n5", 0L))
-                .buildOrThrow();
+        Map<String, Map<String, Long>> queries = ImmutableMap.of(
+                "q_1",
+                ImmutableMap.of("n1", 0L, "n2", 0L, "n3", 0L, "n4", 0L, "n5", 0L));
 
         assertEquals(
                 lowMemoryKiller.chooseTargetToKill(
@@ -227,8 +230,10 @@ public class TestLeastWastedEffortTaskLowMemoryKiller
                         ImmutableList.of(),
                         0,
                         0,
-                        false,
+                        OutputBufferStatus.initial(),
+                        DataSize.of(0, DataSize.Unit.MEGABYTE),
                         DataSize.of(1, DataSize.Unit.MEGABYTE),
+                        Optional.of(1),
                         DataSize.of(1, DataSize.Unit.MEGABYTE),
                         DataSize.of(1, DataSize.Unit.MEGABYTE),
                         DataSize.of(0, DataSize.Unit.MEGABYTE),
@@ -247,7 +252,9 @@ public class TestLeastWastedEffortTaskLowMemoryKiller
                         0,
                         0,
                         0,
-                        ImmutableList.of()),
+                        Optional.empty(),
+                        Optional.of(new TDigestHistogram(new TDigest())),
+                        Optional.empty()),
                 ImmutableSet.of(),
                 new TaskStats(DateTime.now(),
                         null,
@@ -288,6 +295,7 @@ public class TestLeastWastedEffortTaskLowMemoryKiller
                         0,
                         new Duration(0, MILLISECONDS),
                         DataSize.ofBytes(0),
+                        Optional.empty(),
                         0,
                         new Duration(0, MILLISECONDS),
                         ImmutableList.of()),

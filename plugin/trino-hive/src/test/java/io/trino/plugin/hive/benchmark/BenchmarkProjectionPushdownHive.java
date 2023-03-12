@@ -274,15 +274,14 @@ public class BenchmarkProjectionPushdownHive
 
                 return RowBlock.fromFieldBlocks(rowCount, Optional.empty(), fieldBlocks);
             }
-            else if (type instanceof VarcharType) {
+            if (type instanceof VarcharType) {
                 BlockBuilder builder = VARCHAR.createBlockBuilder(null, rowCount);
                 for (int i = 0; i < rowCount; i++) {
                     VARCHAR.writeString(builder, generateRandomString(random, 500));
                 }
                 return builder.build();
             }
-            else if (type instanceof ArrayType) {
-                ArrayType arrayType = (ArrayType) type;
+            if (type instanceof ArrayType arrayType) {
                 Type elementType = arrayType.getElementType();
 
                 BlockBuilder blockBuilder = type.createBlockBuilder(null, rowCount);
@@ -335,7 +334,7 @@ public class BenchmarkProjectionPushdownHive
             throws Exception
     {
         benchmark(BenchmarkProjectionPushdownHive.class)
-                .withOptions(optionsBuilder -> optionsBuilder.jvmArgsAppend("-Xmx4g", "-Xms4g", "-XX:+UseG1GC"))
+                .withOptions(optionsBuilder -> optionsBuilder.jvmArgsAppend("-Xmx4g", "-Xms4g"))
                 .run();
     }
 

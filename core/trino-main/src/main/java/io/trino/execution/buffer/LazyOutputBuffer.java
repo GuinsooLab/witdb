@@ -22,7 +22,7 @@ import io.airlift.units.DataSize;
 import io.trino.exchange.ExchangeManagerRegistry;
 import io.trino.execution.StateMachine.StateChangeListener;
 import io.trino.execution.TaskId;
-import io.trino.execution.buffer.OutputBuffers.OutputBufferId;
+import io.trino.execution.buffer.PipelinedOutputBuffers.OutputBufferId;
 import io.trino.memory.context.LocalMemoryContext;
 import io.trino.spi.exchange.ExchangeManager;
 import io.trino.spi.exchange.ExchangeSink;
@@ -109,12 +109,13 @@ public class LazyOutputBuffer
     }
 
     @Override
-    public boolean isOverutilized()
+    public OutputBufferStatus getStatus()
     {
         OutputBuffer outputBuffer = getDelegateOutputBuffer();
-
-        // until output buffer is initialized, readers cannot enqueue and thus cannot be blocked
-        return (outputBuffer != null) && outputBuffer.isOverutilized();
+        if (outputBuffer == null) {
+            return OutputBufferStatus.initial();
+        }
+        return outputBuffer.getStatus();
     }
 
     @Override
@@ -137,7 +138,9 @@ public class LazyOutputBuffer
                     0,
                     0,
                     0,
-                    ImmutableList.of());
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty());
         }
         return outputBuffer.getInfo();
     }
@@ -162,25 +165,21 @@ public class LazyOutputBuffer
                     if (stateMachine.getState().isTerminal()) {
                         return;
                     }
-                    switch (newOutputBuffers.getType()) {
-                        case PARTITIONED:
-                            outputBuffer = new PartitionedOutputBuffer(taskInstanceId, stateMachine, newOutputBuffers, maxBufferSize, memoryContextSupplier, executor);
-                            break;
-                        case BROADCAST:
-                            outputBuffer = new BroadcastOutputBuffer(taskInstanceId, stateMachine, maxBroadcastBufferSize, memoryContextSupplier, executor, notifyStatusChanged);
-                            break;
-                        case ARBITRARY:
-                            outputBuffer = new ArbitraryOutputBuffer(taskInstanceId, stateMachine, maxBufferSize, memoryContextSupplier, executor);
-                            break;
-                        case SPOOL:
-                            ExchangeSinkInstanceHandle exchangeSinkInstanceHandle = newOutputBuffers.getExchangeSinkInstanceHandle()
-                                    .orElseThrow(() -> new IllegalArgumentException("exchange sink handle is expected to be present for buffer type EXTERNAL"));
-                            ExchangeManager exchangeManager = exchangeManagerRegistry.getExchangeManager();
-                            ExchangeSink exchangeSink = exchangeManager.createSink(exchangeSinkInstanceHandle, false);
-                            outputBuffer = new SpoolingExchangeOutputBuffer(stateMachine, newOutputBuffers, exchangeSink, memoryContextSupplier);
-                            break;
-                        default:
-                            throw new IllegalArgumentException("Unexpected output buffer type: " + newOutputBuffers.getType());
+                    if (newOutputBuffers instanceof PipelinedOutputBuffers outputBuffers) {
+                        outputBuffer = switch (outputBuffers.getType()) {
+                            case PARTITIONED -> new PartitionedOutputBuffer(taskInstanceId, stateMachine, outputBuffers, maxBufferSize, memoryContextSupplier, executor);
+                            case BROADCAST -> new BroadcastOutputBuffer(taskInstanceId, stateMachine, maxBroadcastBufferSize, memoryContextSupplier, executor, notifyStatusChanged);
+                            case ARBITRARY -> new ArbitraryOutputBuffer(taskInstanceId, stateMachine, maxBufferSize, memoryContextSupplier, executor);
+                        };
+                    }
+                    else if (newOutputBuffers instanceof SpoolingOutputBuffers outputBuffers) {
+                        ExchangeSinkInstanceHandle exchangeSinkInstanceHandle = outputBuffers.getExchangeSinkInstanceHandle();
+                        ExchangeManager exchangeManager = exchangeManagerRegistry.getExchangeManager();
+                        ExchangeSink exchangeSink = exchangeManager.createSink(exchangeSinkInstanceHandle);
+                        outputBuffer = new SpoolingExchangeOutputBuffer(stateMachine, outputBuffers, exchangeSink, memoryContextSupplier);
+                    }
+                    else {
+                        throw new IllegalArgumentException("Unexpected output buffers type: " + newOutputBuffers.getClass());
                     }
 
                     // process pending aborts and reads outside of synchronized lock
@@ -210,8 +209,10 @@ public class LazyOutputBuffer
         if (outputBuffer == null) {
             synchronized (this) {
                 if (delegate == null) {
-                    if (stateMachine.getState() == FINISHED) {
-                        return immediateFuture(emptyResults(taskInstanceId, 0, true));
+                    if (stateMachine.getState().isTerminal()) {
+                        // only set complete when finished, otherwise
+                        boolean complete = stateMachine.getState() == FINISHED;
+                        return immediateFuture(emptyResults(taskInstanceId, 0, complete));
                     }
 
                     PendingRead pendingRead = new PendingRead(bufferId, token, maxSize);
@@ -311,19 +312,31 @@ public class LazyOutputBuffer
     @Override
     public void abort()
     {
+        List<PendingRead> pendingReads = ImmutableList.of();
         OutputBuffer outputBuffer = delegate;
         if (outputBuffer == null) {
             synchronized (this) {
                 if (delegate == null) {
                     // ignore abort if the buffer already in a terminal state.
-                    stateMachine.abort();
+                    if (!stateMachine.abort()) {
+                        return;
+                    }
 
-                    // Do not free readers on fail
-                    return;
+                    pendingReads = ImmutableList.copyOf(this.pendingReads);
+                    this.pendingReads.clear();
                 }
                 outputBuffer = delegate;
             }
         }
+
+        // if there is no output buffer, send an empty result without buffer completed signaled
+        if (outputBuffer == null) {
+            for (PendingRead pendingRead : pendingReads) {
+                pendingRead.getFutureResult().set(emptyResults(taskInstanceId, 0, false));
+            }
+            return;
+        }
+
         outputBuffer.abort();
     }
 

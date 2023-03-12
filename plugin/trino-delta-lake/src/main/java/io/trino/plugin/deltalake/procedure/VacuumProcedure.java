@@ -16,6 +16,10 @@ package io.trino.plugin.deltalake.procedure;
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
+import io.trino.filesystem.FileEntry;
+import io.trino.filesystem.FileIterator;
+import io.trino.filesystem.TrinoFileSystem;
+import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.plugin.base.CatalogName;
 import io.trino.plugin.deltalake.DeltaLakeConfig;
 import io.trino.plugin.deltalake.DeltaLakeMetadata;
@@ -27,7 +31,6 @@ import io.trino.plugin.deltalake.transactionlog.DeltaLakeTransactionLogEntry;
 import io.trino.plugin.deltalake.transactionlog.RemoveFileEntry;
 import io.trino.plugin.deltalake.transactionlog.TableSnapshot;
 import io.trino.plugin.deltalake.transactionlog.TransactionLogAccess;
-import io.trino.plugin.hive.HdfsEnvironment;
 import io.trino.spi.TrinoException;
 import io.trino.spi.classloader.ThreadContextClassLoader;
 import io.trino.spi.connector.ConnectorAccessControl;
@@ -35,10 +38,7 @@ import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.procedure.Procedure;
 import io.trino.spi.procedure.Procedure.Argument;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.RemoteIterator;
 
 import javax.inject.Inject;
 import javax.inject.Provider;
@@ -46,6 +46,7 @@ import javax.inject.Provider;
 import java.io.IOException;
 import java.lang.invoke.MethodHandle;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -54,14 +55,13 @@ import java.util.stream.Stream;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static io.trino.plugin.base.util.Procedures.checkProcedureArgument;
 import static io.trino.plugin.deltalake.DeltaLakeSessionProperties.getVacuumMinRetention;
-import static io.trino.plugin.deltalake.procedure.Procedures.checkProcedureArgument;
 import static io.trino.plugin.deltalake.transactionlog.TransactionLogUtil.TRANSACTION_LOG_DIRECTORY;
 import static io.trino.plugin.deltalake.transactionlog.TransactionLogUtil.getTransactionLogDir;
-import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static io.trino.spi.block.MethodHandleUtil.methodHandle;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.lang.String.format;
+import static java.lang.invoke.MethodHandles.lookup;
 import static java.util.Comparator.naturalOrder;
 import static java.util.Objects.requireNonNull;
 
@@ -69,30 +69,33 @@ public class VacuumProcedure
         implements Provider<Procedure>
 {
     private static final Logger log = Logger.get(VacuumProcedure.class);
+    private static final int DELETE_BATCH_SIZE = 1000;
 
-    private static final MethodHandle VACUUM = methodHandle(
-            VacuumProcedure.class,
-            "vacuum",
-            ConnectorSession.class,
-            ConnectorAccessControl.class,
-            String.class,
-            String.class,
-            String.class);
+    private static final MethodHandle VACUUM;
+
+    static {
+        try {
+            VACUUM = lookup().unreflect(VacuumProcedure.class.getMethod("vacuum", ConnectorSession.class, ConnectorAccessControl.class, String.class, String.class, String.class));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
 
     private final CatalogName catalogName;
-    private final HdfsEnvironment hdfsEnvironment;
+    private final TrinoFileSystemFactory fileSystemFactory;
     private final DeltaLakeMetadataFactory metadataFactory;
     private final TransactionLogAccess transactionLogAccess;
 
     @Inject
     public VacuumProcedure(
             CatalogName catalogName,
-            HdfsEnvironment hdfsEnvironment,
+            TrinoFileSystemFactory fileSystemFactory,
             DeltaLakeMetadataFactory metadataFactory,
             TransactionLogAccess transactionLogAccess)
     {
         this.catalogName = requireNonNull(catalogName, "catalogName is null");
-        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
+        this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
         this.metadataFactory = requireNonNull(metadataFactory, "metadataFactory is null");
         this.transactionLogAccess = requireNonNull(transactionLogAccess, "transactionLogAccess is null");
     }
@@ -169,7 +172,7 @@ public class VacuumProcedure
         TableSnapshot tableSnapshot = transactionLogAccess.loadSnapshot(tableName, new Path(handle.getLocation()), session);
         Path tableLocation = tableSnapshot.getTableLocation();
         Path transactionLogDir = getTransactionLogDir(tableLocation);
-        FileSystem fileSystem = hdfsEnvironment.getFileSystem(new HdfsEnvironment.HdfsContext(session), tableLocation);
+        TrinoFileSystem fileSystem = fileSystemFactory.create(session);
         String commonPathPrefix = tableLocation + "/";
         String queryId = session.getQueryId();
 
@@ -202,79 +205,71 @@ public class VacuumProcedure
                 threshold,
                 retainedPaths.size());
 
-        long nonFiles = 0;
         long allPathsChecked = 0;
         long transactionLogFiles = 0;
         long retainedKnownFiles = 0;
         long retainedUnknownFiles = 0;
         long removedFiles = 0;
 
-        RemoteIterator<LocatedFileStatus> listing = fileSystem.listFiles(tableLocation, true);
+        List<String> filesToDelete = new ArrayList<>();
+        FileIterator listing = fileSystem.listFiles(tableLocation.toString());
         while (listing.hasNext()) {
-            LocatedFileStatus fileStatus = listing.next();
-            Path path = fileStatus.getPath();
+            FileEntry entry = listing.next();
+            String location = entry.location();
             checkState(
-                    path.toString().startsWith(commonPathPrefix),
+                    location.startsWith(commonPathPrefix),
                     "Unexpected path [%s] returned when listing files under [%s]",
-                    path,
+                    location,
                     tableLocation);
-            String relativePath = path.toString().substring(commonPathPrefix.length());
+            String relativePath = location.substring(commonPathPrefix.length());
             if (relativePath.isEmpty()) {
                 // A file returned for "tableLocation/", might be possible on S3.
                 continue;
             }
             allPathsChecked++;
 
-            // Ignore directories (and symlinks, etc.). If a partition directory is old and empty (or made empty by us), removing it could break concurrent writes
-            // on file systems with directories (e.g. HDFS).
-            // TODO Note: Databricks can delete directories during vacuum on s3. This might need to be revisited. (https://github.com/trinodb/trino/issues/12018)
-            if (!fileStatus.isFile()) {
-                nonFiles++;
-                continue;
-            }
-
             // ignore tableLocation/_delta_log/**
             if (relativePath.equals(TRANSACTION_LOG_DIRECTORY) || relativePath.startsWith(TRANSACTION_LOG_DIRECTORY + "/")) {
-                log.debug("[%s] skipping a file inside transaction log dir: %s", queryId, path);
+                log.debug("[%s] skipping a file inside transaction log dir: %s", queryId, location);
                 transactionLogFiles++;
                 continue;
             }
 
             // skip retained files
             if (retainedPaths.contains(relativePath)) {
-                log.debug("[%s] retaining a known file: %s", queryId, path);
+                log.debug("[%s] retaining a known file: %s", queryId, location);
                 retainedKnownFiles++;
                 continue;
             }
 
             // ignore recently created files
-            long modificationTime = fileStatus.getModificationTime();
-            Instant modificationInstant = Instant.ofEpochMilli(modificationTime);
-            if (!modificationInstant.isBefore(threshold)) {
-                log.debug("[%s] retaining an unknown file %s with modification time %s (%s)", queryId, path, modificationTime, modificationInstant);
+            Instant modificationTime = entry.lastModified();
+            if (!modificationTime.isBefore(threshold)) {
+                log.debug("[%s] retaining an unknown file %s with modification time %s", queryId, location, modificationTime);
                 retainedUnknownFiles++;
                 continue;
             }
 
-            log.debug(
-                    "[%s] deleting file [%s] with modification time %s (%s)",
-                    queryId,
-                    path,
-                    modificationTime,
-                    modificationInstant);
-            if (!fileSystem.delete(path, false)) {
-                throw new TrinoException(GENERIC_INTERNAL_ERROR, "Failed to delete file: " + path);
+            log.debug("[%s] deleting file [%s] with modification time %s", queryId, location, modificationTime);
+            filesToDelete.add(location);
+            if (filesToDelete.size() == DELETE_BATCH_SIZE) {
+                fileSystem.deleteFiles(filesToDelete);
+                removedFiles += filesToDelete.size();
+                filesToDelete.clear();
             }
-            removedFiles++;
+        }
+
+        if (!filesToDelete.isEmpty()) {
+            fileSystem.deleteFiles(filesToDelete);
+            removedFiles += filesToDelete.size();
         }
 
         log.info(
-                "[%s] finished vacuuming table %s [%s]: files checked: %s; non-files: %s; metadata files: %s; retained known files: %s; retained unknown files: %s; removed files: %s",
+                "[%s] finished vacuuming table %s [%s]: files checked: %s; metadata files: %s; retained known files: %s; retained unknown files: %s; removed files: %s",
                 queryId,
                 tableName,
                 tableLocation,
                 allPathsChecked,
-                nonFiles,
                 transactionLogFiles,
                 retainedKnownFiles,
                 retainedUnknownFiles,

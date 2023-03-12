@@ -20,18 +20,21 @@ import com.google.common.base.Splitter;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.RecursiveDeleteOption;
+import dev.failsafe.Failsafe;
+import dev.failsafe.FailsafeExecutor;
+import dev.failsafe.Timeout;
+import dev.failsafe.function.CheckedRunnable;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
-import net.jodah.failsafe.Failsafe;
-import net.jodah.failsafe.FailsafeExecutor;
-import net.jodah.failsafe.Timeout;
-import net.jodah.failsafe.function.CheckedRunnable;
+import io.trino.testing.containers.ConditionalPullPolicy;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.FixedHostPortGenericContainer;
 import org.testcontainers.containers.SelinuxContext;
 import org.testcontainers.containers.wait.strategy.WaitAllStrategy;
 import org.testcontainers.containers.wait.strategy.WaitStrategy;
+import org.testcontainers.images.ImagePullPolicy;
 import org.testcontainers.images.builder.Transferable;
+import org.testcontainers.utility.DockerImageName;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -69,8 +72,9 @@ public class DockerContainer
     private static final Logger log = Logger.get(DockerContainer.class);
     private static final long NANOSECONDS_PER_SECOND = 1_000 * 1_000 * 1_000L;
 
-    private static final Timeout<ExecResult> asyncTimeout = Timeout.<ExecResult>of(ofSeconds(30))
-            .withCancel(true);
+    private static final Timeout<ExecResult> asyncTimeout = Timeout.<ExecResult>builder(ofSeconds(30))
+            .withInterrupt()
+            .build();
 
     private static final FailsafeExecutor<ExecResult> executor = Failsafe
             .with(asyncTimeout)
@@ -87,6 +91,7 @@ public class DockerContainer
     private List<String> logPaths = new ArrayList<>();
     private Optional<EnvironmentListener> listener = Optional.empty();
     private boolean temporary;
+    private static final ImagePullPolicy pullPolicy = new ConditionalPullPolicy();
 
     public DockerContainer(String dockerImageName, String logicalName)
     {
@@ -95,6 +100,16 @@ public class DockerContainer
 
         // workaround for https://github.com/testcontainers/testcontainers-java/pull/2861
         setCopyToFileContainerPathMap(new LinkedHashMap<>());
+
+        this.withImagePullPolicy(pullPolicy);
+    }
+
+    @Override
+    public void setDockerImageName(String dockerImageName)
+    {
+        DockerImageName canonicalName = DockerImageName.parse(requireNonNull(dockerImageName, "dockerImageName is null"));
+        setImage(CompletableFuture.completedFuture(canonicalName.toString()));
+        withImagePullPolicy(pullPolicy);
     }
 
     public String getLogicalName()

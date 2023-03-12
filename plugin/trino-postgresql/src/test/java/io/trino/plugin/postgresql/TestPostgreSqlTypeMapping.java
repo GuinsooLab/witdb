@@ -23,6 +23,7 @@ import io.trino.spi.type.Decimals;
 import io.trino.spi.type.TimeZoneKey;
 import io.trino.spi.type.Type;
 import io.trino.sql.planner.plan.FilterNode;
+import io.trino.sql.planner.plan.TopNNode;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.DataProviders;
 import io.trino.testing.QueryRunner;
@@ -857,7 +858,6 @@ public class TestPostgreSqlTypeMapping
         SqlDataTypeTest.create()
                 .addRoundTrip("ARRAY(bigint)", "ARRAY[]", new ArrayType(BIGINT), "CAST(ARRAY[] AS ARRAY(BIGINT))")
                 .addRoundTrip("ARRAY(boolean)", "NULL", new ArrayType(BOOLEAN), "CAST(NULL AS ARRAY(BOOLEAN))")
-                .addRoundTrip("ARRAY(integer)", "ARRAY[1, 2, 3, 4]", new ArrayType(INTEGER), "ARRAY[1, 2, 3, 4]")
                 .addRoundTrip("ARRAY(timestamp(3))", "ARRAY[]", new ArrayType(createTimestampType(3)), "CAST(ARRAY[] AS ARRAY(TIMESTAMP(3)))")
                 .addRoundTrip("ARRAY(timestamp(3) with time zone)", "ARRAY[]", new ArrayType(createTimestampWithTimeZoneType(3)), "CAST(ARRAY[] AS ARRAY(TIMESTAMP(3) WITH TIME ZONE))")
                 .execute(getQueryRunner(), sessionWithArrayAsArray(), trinoCreateAsSelect(sessionWithArrayAsArray(), "test_array_empty_or_nulls"))
@@ -915,16 +915,13 @@ public class TestPostgreSqlTypeMapping
 
     private SqlDataTypeTest arrayDateTest(Function<String, String> arrayTypeFactory)
     {
-        ZoneId jvmZone = ZoneId.systemDefault();
-        checkState(jvmZone.getId().equals("America/Bahia_Banderas"), "This test assumes certain JVM time zone");
         LocalDate dateOfLocalTimeChangeForwardAtMidnightInJvmZone = LocalDate.of(1970, 1, 1);
         checkIsGap(jvmZone, dateOfLocalTimeChangeForwardAtMidnightInJvmZone.atStartOfDay());
 
-        ZoneId someZone = ZoneId.of("Europe/Vilnius");
         LocalDate dateOfLocalTimeChangeForwardAtMidnightInSomeZone = LocalDate.of(1983, 4, 1);
-        checkIsGap(someZone, dateOfLocalTimeChangeForwardAtMidnightInSomeZone.atStartOfDay());
+        checkIsGap(vilnius, dateOfLocalTimeChangeForwardAtMidnightInSomeZone.atStartOfDay());
         LocalDate dateOfLocalTimeChangeBackwardAtMidnightInSomeZone = LocalDate.of(1983, 10, 1);
-        checkIsDoubled(someZone, dateOfLocalTimeChangeBackwardAtMidnightInSomeZone.atStartOfDay().minusMinutes(1));
+        checkIsDoubled(vilnius, dateOfLocalTimeChangeBackwardAtMidnightInSomeZone.atStartOfDay().minusMinutes(1));
 
         return SqlDataTypeTest.create()
                 .addRoundTrip(arrayTypeFactory.apply("date"), "ARRAY[DATE '1952-04-03']", new ArrayType(DATE), "ARRAY[DATE '1952-04-03']") // before epoch
@@ -1115,7 +1112,8 @@ public class TestPostgreSqlTypeMapping
     public void testEnum()
     {
         JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(postgreSqlServer.getJdbcUrl(), postgreSqlServer.getProperties());
-        jdbcSqlExecutor.execute("CREATE TYPE enum_t AS ENUM ('a','b','c')");
+        // Define enum values in a order different from lexicographical
+        jdbcSqlExecutor.execute("CREATE TYPE enum_t AS ENUM ('b', 'a', 'C')");
         jdbcSqlExecutor.execute("CREATE TABLE test_enum(id int, enum_column enum_t)");
         jdbcSqlExecutor.execute("INSERT INTO test_enum(id,enum_column) values (1,'a'::enum_t),(2,'b'::enum_t)");
         try {
@@ -1123,7 +1121,27 @@ public class TestPostgreSqlTypeMapping
                     "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_name = 'test_enum'",
                     "VALUES ('id','integer'),('enum_column','varchar')");
             assertQuery("SELECT * FROM test_enum", "VALUES (1,'a'),(2,'b')");
-            assertQuery("SELECT * FROM test_enum WHERE enum_column='a'", "VALUES (1,'a')");
+            assertThat(query("SELECT * FROM test_enum WHERE enum_column = 'a'"))
+                    .matches("VALUES (1, VARCHAR 'a')")
+                    .isFullyPushedDown();
+            assertThat(query("SELECT * FROM test_enum WHERE enum_column != 'a'"))
+                    .matches("VALUES (2, VARCHAR 'b')")
+                    .isNotFullyPushedDown(FilterNode.class);
+            assertThat(query("SELECT * FROM test_enum WHERE enum_column <= 'a'"))
+                    .matches("VALUES (1, VARCHAR 'a')")
+                    .isNotFullyPushedDown(FilterNode.class);
+            assertThat(query("SELECT * FROM test_enum WHERE enum_column <= 'b'"))
+                    .matches("VALUES (1, VARCHAR 'a'), (2, VARCHAR 'b')")
+                    .isNotFullyPushedDown(FilterNode.class);
+            assertThat(query("SELECT * FROM test_enum WHERE enum_column <= 'c'"))
+                    .matches("VALUES (1, VARCHAR 'a'), (2, VARCHAR 'b')")
+                    .isNotFullyPushedDown(FilterNode.class);
+            assertThat(query("SELECT * FROM test_enum WHERE enum_column <= 'C'"))
+                    .returnsEmptyResult()
+                    .isNotFullyPushedDown(FilterNode.class);
+            assertThat(query("SELECT id FROM test_enum ORDER BY enum_column LIMIT 1"))
+                    .matches("VALUES 1")
+                    .isNotFullyPushedDown(TopNNode.class);
         }
         finally {
             jdbcSqlExecutor.execute("DROP TABLE test_enum");
@@ -1468,7 +1486,7 @@ public class TestPostgreSqlTypeMapping
                 // using two non-JVM zones so that we don't need to worry what Postgres system zone is
                 {vilnius},
                 {kathmandu},
-                {ZoneId.of(TestingSession.DEFAULT_TIME_ZONE_KEY.getId())},
+                {TestingSession.DEFAULT_TIME_ZONE_KEY.getZoneId()},
         };
     }
 
@@ -1791,9 +1809,7 @@ public class TestPostgreSqlTypeMapping
         if (insertWithTrino) {
             return trinoTimestampWithTimeZoneDataType(precision);
         }
-        else {
-            return postgreSqlTimestampWithTimeZoneDataType(precision);
-        }
+        return postgreSqlTimestampWithTimeZoneDataType(precision);
     }
 
     public static DataType<ZonedDateTime> trinoTimestampWithTimeZoneDataType(int precision)
@@ -1826,9 +1842,7 @@ public class TestPostgreSqlTypeMapping
         if (insertWithTrino) {
             return arrayDataType(trinoTimestampWithTimeZoneDataType(precision));
         }
-        else {
-            return arrayDataType(postgreSqlTimestampWithTimeZoneDataType(precision), format("timestamptz(%d)[]", precision));
-        }
+        return arrayDataType(postgreSqlTimestampWithTimeZoneDataType(precision), format("timestamptz(%d)[]", precision));
     }
 
     private Session sessionWithArrayAsArray()

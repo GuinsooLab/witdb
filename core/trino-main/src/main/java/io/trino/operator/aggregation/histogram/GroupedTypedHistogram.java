@@ -21,10 +21,10 @@ import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.type.Type;
 import io.trino.type.BlockTypeOperators.BlockPositionEqual;
 import io.trino.type.BlockTypeOperators.BlockPositionHashCode;
-import org.openjdk.jol.info.ClassLayout;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static io.airlift.slice.SizeOf.instanceSize;
 import static io.trino.operator.aggregation.histogram.HashUtil.calculateMaxFill;
 import static io.trino.operator.aggregation.histogram.HashUtil.nextBucketId;
 import static io.trino.operator.aggregation.histogram.HashUtil.nextProbeLinear;
@@ -57,7 +57,7 @@ public class GroupedTypedHistogram
 {
     private static final float MAX_FILL_RATIO = 0.5f;
 
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(GroupedTypedHistogram.class).instanceSize();
+    private static final int INSTANCE_SIZE = instanceSize(GroupedTypedHistogram.class);
     private static final int EMPTY_BUCKET = -1;
     private static final int NULL = -1;
     private final int bucketId;
@@ -410,7 +410,6 @@ public class GroupedTypedHistogram
          * or one with an existing count and simply needs the count updated
          * <p>
          * processEntry handles these cases
-         * @param valueAndGroupHash
          */
         private BucketDataNode(int bucketId, ValueNode valueNode, long valueHash, long valueAndGroupHash, int nodePointerToUse, boolean isEmpty)
         {
@@ -436,10 +435,8 @@ public class GroupedTypedHistogram
                 addNewGroup(groupId, block, position, count);
                 return true;
             }
-            else {
-                valueNode.add(count);
-                return false;
-            }
+            valueNode.add(count);
+            return false;
         }
 
         private void addNewGroup(long groupId, Block block, int position, long count)
@@ -488,16 +485,14 @@ public class GroupedTypedHistogram
                 if (nodePointer == EMPTY_BUCKET) {
                     return new BucketDataNode(bucketId, new ValueNode(nextNodePointer), valueHash, valueAndGroupHash, nextNodePointer, true);
                 }
-                else if (groupAndValueMatches(groupId, block, position, nodePointer, valuePositions.get(nodePointer))) {
+                if (groupAndValueMatches(groupId, block, position, nodePointer, valuePositions.get(nodePointer))) {
                     // value match
                     return new BucketDataNode(bucketId, new ValueNode(nodePointer), valueHash, valueAndGroupHash, nodePointer, false);
                 }
-                else {
-                    // keep looking
-                    int probe = nextProbe(probeCount);
-                    bucketId = nextBucketId(originalBucketId, mask, probe);
-                    probeCount++;
-                }
+                // keep looking
+                int probe = nextProbe(probeCount);
+                bucketId = nextBucketId(originalBucketId, mask, probe);
+                probeCount++;
             }
         }
 

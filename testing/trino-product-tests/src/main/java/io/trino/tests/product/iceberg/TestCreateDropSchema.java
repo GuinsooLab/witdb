@@ -22,8 +22,8 @@ import org.testng.annotations.Test;
 
 import javax.inject.Inject;
 
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.tests.product.TestGroups.ICEBERG;
-import static io.trino.tests.product.hive.util.TemporaryHiveTable.randomTableSuffix;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
 import static java.lang.String.format;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,7 +48,7 @@ public class TestCreateDropSchema
     @Test(groups = ICEBERG)
     public void testDropSchemaFiles()
     {
-        String schemaName = "schema_without_location_" + randomTableSuffix();
+        String schemaName = "schema_without_location_" + randomNameSuffix();
         String schemaDir = format("%s/%s.db/", warehouseDirectory, schemaName);
 
         onTrino().executeQuery(format("CREATE SCHEMA %s", schemaName));
@@ -60,7 +60,7 @@ public class TestCreateDropSchema
     @Test(groups = ICEBERG)
     public void testDropSchemaFilesWithLocation()
     {
-        String schemaName = "schema_with_empty_location_" + randomTableSuffix();
+        String schemaName = "schema_with_empty_location_" + randomNameSuffix();
         String schemaDir = warehouseDirectory + "/schema-with-empty-location/";
 
         onTrino().executeQuery(format("CREATE SCHEMA %s WITH (location = '%s')", schemaName, schemaDir));
@@ -72,7 +72,7 @@ public class TestCreateDropSchema
     @Test(groups = ICEBERG) // specified location, external file in subdir
     public void testDropWithExternalFilesInSubdirectory()
     {
-        String schemaName = "schema_with_nonempty_location_" + randomTableSuffix();
+        String schemaName = "schema_with_nonempty_location_" + randomNameSuffix();
         String schemaDir = warehouseDirectory + "/schema-with-nonempty-location/";
         // Use subdirectory to make sure file check is recursive
         String subDir = schemaDir + "subdir/";
@@ -90,27 +90,10 @@ public class TestCreateDropSchema
         hdfsClient.delete(schemaDir);
     }
 
-    @Test(groups = ICEBERG) // make sure empty directories are noticed as well
-    public void testDropSchemaFilesWithEmptyExternalSubdir()
-    {
-        String schemaName = "schema_with_empty_subdirectory_" + randomTableSuffix();
-        String schemaDir = format("%s/%s.db/", warehouseDirectory, schemaName);
-        String externalSubdir = schemaDir + "external-subdir/";
-
-        hdfsClient.createDirectory(externalSubdir);
-
-        onTrino().executeQuery("CREATE SCHEMA " + schemaName);
-        assertFileExistence(externalSubdir, true, "external subdirectory exists after creating schema");
-        onTrino().executeQuery("DROP SCHEMA " + schemaName);
-        assertFileExistence(externalSubdir, true, "external subdirectory exists after dropping schema");
-
-        hdfsClient.delete(schemaDir);
-    }
-
     @Test(groups = ICEBERG) // default location, external file at top level
     public void testDropWithExternalFiles()
     {
-        String schemaName = "schema_with_files_in_default_location_" + randomTableSuffix();
+        String schemaName = "schema_with_files_in_default_location_" + randomNameSuffix();
         String schemaDir = format("%s/%s.db/", warehouseDirectory, schemaName);
 
         // Create file in schema directory before creating schema

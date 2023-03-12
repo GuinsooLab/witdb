@@ -14,14 +14,18 @@
 package io.trino.transaction;
 
 import com.google.common.util.concurrent.ListenableFuture;
-import io.trino.connector.CatalogName;
 import io.trino.metadata.CatalogInfo;
 import io.trino.metadata.CatalogMetadata;
+import io.trino.spi.TrinoException;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.transaction.IsolationLevel;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+
+import static io.trino.spi.StandardErrorCode.NOT_FOUND;
 
 public interface TransactionManager
 {
@@ -36,23 +40,35 @@ public interface TransactionManager
 
     List<TransactionInfo> getAllTransactionInfos();
 
+    Set<TransactionId> getTransactionsUsingCatalog(CatalogHandle catalogHandle);
+
     TransactionId beginTransaction(boolean autoCommitContext);
 
     TransactionId beginTransaction(IsolationLevel isolationLevel, boolean readOnly, boolean autoCommitContext);
 
     List<CatalogInfo> getCatalogs(TransactionId transactionId);
 
-    Optional<CatalogName> getCatalogName(TransactionId transactionId, String catalogName);
+    List<CatalogInfo> getActiveCatalogs(TransactionId transactionId);
+
+    Optional<CatalogHandle> getCatalogHandle(TransactionId transactionId, String catalogName);
+
+    default CatalogMetadata getRequiredCatalogMetadata(TransactionId transactionId, String catalogName)
+    {
+        return getOptionalCatalogMetadata(transactionId, catalogName)
+                .orElseThrow(() -> new TrinoException(NOT_FOUND, "Catalog does not exist: " + catalogName));
+    }
 
     Optional<CatalogMetadata> getOptionalCatalogMetadata(TransactionId transactionId, String catalogName);
 
-    CatalogMetadata getCatalogMetadata(TransactionId transactionId, CatalogName catalogName);
+    CatalogMetadata getCatalogMetadata(TransactionId transactionId, CatalogHandle catalogHandle);
 
-    CatalogMetadata getCatalogMetadataForWrite(TransactionId transactionId, CatalogName catalogName);
+    CatalogMetadata getCatalogMetadataForWrite(TransactionId transactionId, CatalogHandle catalogHandle);
 
     CatalogMetadata getCatalogMetadataForWrite(TransactionId transactionId, String catalogName);
 
-    ConnectorTransactionHandle getConnectorTransaction(TransactionId transactionId, CatalogName catalogName);
+    ConnectorTransactionHandle getConnectorTransaction(TransactionId transactionId, String catalogName);
+
+    ConnectorTransactionHandle getConnectorTransaction(TransactionId transactionId, CatalogHandle catalogHandle);
 
     void checkAndSetActive(TransactionId transactionId);
 
@@ -63,6 +79,8 @@ public interface TransactionManager
     ListenableFuture<Void> asyncCommit(TransactionId transactionId);
 
     ListenableFuture<Void> asyncAbort(TransactionId transactionId);
+
+    void blockCommit(TransactionId transactionId, String reason);
 
     void fail(TransactionId transactionId);
 }

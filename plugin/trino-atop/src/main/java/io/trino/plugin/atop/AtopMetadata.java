@@ -23,7 +23,6 @@ import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
-import io.trino.spi.connector.ConnectorTableProperties;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.ConstraintApplicationResult;
 import io.trino.spi.connector.SchemaTableName;
@@ -56,7 +55,7 @@ public class AtopMetadata
     public AtopMetadata(TypeManager typeManager, Environment environment)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
-        this.environment = requireNonNull(environment, "environment is null").toString();
+        this.environment = environment.toString();
     }
 
     @Override
@@ -147,12 +146,6 @@ public class AtopMetadata
         AtopTableHandle atopTableHandle = (AtopTableHandle) tableHandle;
         SchemaTableName tableName = new SchemaTableName(atopTableHandle.getSchema(), atopTableHandle.getTable().getName());
         throw new ColumnNotFoundException(tableName, columnName);
-    }
-
-    @Override
-    public ConnectorTableProperties getTableProperties(ConnectorSession session, ConnectorTableHandle table)
-    {
-        return new ConnectorTableProperties();
     }
 
     @Override

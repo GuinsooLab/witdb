@@ -20,14 +20,11 @@ import io.trino.Session;
 import io.trino.memory.context.MemoryTrackingContext;
 import io.trino.metadata.Split;
 import io.trino.spi.Page;
-import io.trino.spi.connector.UpdatablePageSource;
 import io.trino.spi.metrics.Metrics;
 import io.trino.sql.planner.plan.PlanNodeId;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
-import java.util.function.Supplier;
 
 import static io.trino.operator.WorkProcessor.ProcessState.blocked;
 import static io.trino.operator.WorkProcessor.ProcessState.finished;
@@ -71,7 +68,7 @@ public class WorkProcessorSourceOperatorAdapter
     public WorkProcessorSourceOperatorAdapter(OperatorContext operatorContext, AdapterWorkProcessorSourceOperatorFactory sourceOperatorFactory)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
-        this.sourceId = requireNonNull(sourceOperatorFactory, "sourceOperatorFactory is null").getSourceId();
+        this.sourceId = sourceOperatorFactory.getSourceId();
         this.splitBuffer = new SplitBuffer();
         this.sourceOperator = sourceOperatorFactory
                 .createAdapterOperator(
@@ -95,19 +92,18 @@ public class WorkProcessorSourceOperatorAdapter
     }
 
     @Override
-    public Supplier<Optional<UpdatablePageSource>> addSplit(Split split)
+    public void addSplit(Split split)
     {
         if (operatorFinishing) {
-            return Optional::empty;
+            return;
         }
 
         Object splitInfo = split.getInfo();
         if (splitInfo != null) {
-            operatorContext.setInfoSupplier(Suppliers.ofInstance(new SplitOperatorInfo(split.getCatalogName(), splitInfo)));
+            operatorContext.setInfoSupplier(Suppliers.ofInstance(new SplitOperatorInfo(split.getCatalogHandle(), splitInfo)));
         }
 
         splitBuffer.add(split);
-        return sourceOperator.getUpdatablePageSourceSupplier();
     }
 
     @Override

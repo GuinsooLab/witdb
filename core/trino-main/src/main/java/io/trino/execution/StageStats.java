@@ -17,24 +17,29 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.stats.Distribution;
 import io.airlift.stats.Distribution.DistributionSnapshot;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.trino.operator.BlockedReason;
 import io.trino.operator.OperatorStats;
+import io.trino.plugin.base.metrics.TDigestHistogram;
 import io.trino.spi.eventlistener.StageGcStatistics;
 import org.joda.time.DateTime;
 
 import javax.annotation.concurrent.Immutable;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.trino.execution.StageState.RUNNING;
 import static java.lang.Math.min;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 @Immutable
 public class StageStats
@@ -96,6 +101,7 @@ public class StageStats
     private final Duration failedInputBlockedTime;
 
     private final DataSize bufferedDataSize;
+    private final Optional<TDigestHistogram> outputBufferUtilization;
     private final DataSize outputDataSize;
     private final DataSize failedOutputDataSize;
     private final long outputPositions;
@@ -170,6 +176,7 @@ public class StageStats
             @JsonProperty("failedInputBlockedTime") Duration failedInputBlockedTime,
 
             @JsonProperty("bufferedDataSize") DataSize bufferedDataSize,
+            @JsonProperty("outputBufferUtilization") Optional<TDigestHistogram> outputBufferUtilization,
             @JsonProperty("outputDataSize") DataSize outputDataSize,
             @JsonProperty("failedOutputDataSize") DataSize failedOutputDataSize,
             @JsonProperty("outputPositions") long outputPositions,
@@ -258,6 +265,7 @@ public class StageStats
         this.failedInputBlockedTime = requireNonNull(failedInputBlockedTime, "failedInputBlockedTime is null");
 
         this.bufferedDataSize = requireNonNull(bufferedDataSize, "bufferedDataSize is null");
+        this.outputBufferUtilization = requireNonNull(outputBufferUtilization, "outputBufferUtilization is null");
         this.outputDataSize = requireNonNull(outputDataSize, "outputDataSize is null");
         this.failedOutputDataSize = requireNonNull(failedOutputDataSize, "failedOutputDataSize is null");
         checkArgument(outputPositions >= 0, "outputPositions is negative");
@@ -553,6 +561,12 @@ public class StageStats
     }
 
     @JsonProperty
+    public Optional<TDigestHistogram> getOutputBufferUtilization()
+    {
+        return outputBufferUtilization;
+    }
+
+    @JsonProperty
     public DataSize getOutputDataSize()
     {
         return outputDataSize;
@@ -646,5 +660,76 @@ public class StageStats
                 fullyBlocked,
                 blockedReasons,
                 progressPercentage);
+    }
+
+    public static StageStats createInitial()
+    {
+        DataSize zeroBytes = DataSize.of(0, BYTE);
+        Duration zeroSeconds = new Duration(0, SECONDS);
+        return new StageStats(
+                null,
+                new Distribution().snapshot(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                zeroBytes,
+                zeroBytes,
+                zeroBytes,
+                zeroBytes,
+                zeroBytes,
+                zeroSeconds,
+                zeroSeconds,
+                zeroSeconds,
+                zeroSeconds,
+                zeroSeconds,
+                false,
+                ImmutableSet.of(),
+                zeroBytes,
+                zeroBytes,
+                0,
+                0,
+                zeroSeconds,
+                zeroSeconds,
+                zeroBytes,
+                zeroBytes,
+                0,
+                0,
+                zeroBytes,
+                zeroBytes,
+                0,
+                0,
+                zeroBytes,
+                zeroBytes,
+                0,
+                0,
+                zeroSeconds,
+                zeroSeconds,
+                zeroBytes,
+                Optional.empty(),
+                zeroBytes,
+                zeroBytes,
+                0,
+                0,
+                zeroSeconds,
+                zeroSeconds,
+                zeroBytes,
+                zeroBytes,
+                new StageGcStatistics(
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0),
+                ImmutableList.of());
     }
 }

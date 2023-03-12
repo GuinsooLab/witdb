@@ -34,16 +34,19 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static com.google.common.base.Strings.padEnd;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static io.trino.tempto.assertions.QueryAssert.Row.row;
 import static io.trino.tempto.assertions.QueryAssert.assertQueryFailure;
 import static io.trino.tempto.assertions.QueryAssert.assertThat;
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.tests.product.TestGroups.HIVE_ICEBERG_REDIRECTIONS;
 import static io.trino.tests.product.TestGroups.HIVE_VIEWS;
 import static io.trino.tests.product.TestGroups.PROFILE_SPECIFIC_TESTS;
-import static io.trino.tests.product.hive.util.TemporaryHiveTable.randomTableSuffix;
+import static io.trino.tests.product.utils.HadoopTestUtils.ERROR_READING_FROM_HIVE_ISSUE;
+import static io.trino.tests.product.utils.HadoopTestUtils.ERROR_READING_FROM_HIVE_MATCH;
 import static io.trino.tests.product.utils.QueryExecutors.onHive;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
 import static java.lang.String.format;
@@ -170,8 +173,8 @@ public abstract class AbstractTestHiveViews
     @Test(groups = HIVE_VIEWS)
     public void testViewReferencingTableInDifferentSchema()
     {
-        String schemaX = "test_view_table_in_different_schema_x" + randomTableSuffix();
-        String schemaY = "test_view_table_in_different_schema_y" + randomTableSuffix();
+        String schemaX = "test_view_table_in_different_schema_x" + randomNameSuffix();
+        String schemaY = "test_view_table_in_different_schema_y" + randomNameSuffix();
         String tableName = "test_table";
         String viewName = "test_view";
 
@@ -190,7 +193,7 @@ public abstract class AbstractTestHiveViews
     @Test(groups = HIVE_VIEWS)
     public void testViewReferencingTableInTheSameSchemaWithoutQualifier()
     {
-        String schemaX = "test_view_table_same_schema_without_qualifier_schema" + randomTableSuffix();
+        String schemaX = "test_view_table_same_schema_without_qualifier_schema" + randomNameSuffix();
         String tableName = "test_table";
         String viewName = "test_view";
 
@@ -300,19 +303,19 @@ public abstract class AbstractTestHiveViews
 
         QueryResult actualResult = onTrino().executeQuery(format(showCreateViewSql, "hive"));
         assertThat(actualResult).hasRowsCount(1);
-        assertEquals((String) actualResult.row(0).get(0), format(expectedResult, "hive"));
+        assertEquals((String) actualResult.getOnlyValue(), format(expectedResult, "hive"));
 
         // Verify the translated view sql for a catalog other than "hive", which is configured to the same metastore
         actualResult = onTrino().executeQuery(format(showCreateViewSql, "hive_with_external_writes"));
         assertThat(actualResult).hasRowsCount(1);
-        assertEquals((String) actualResult.row(0).get(0), format(expectedResult, "hive_with_external_writes"));
+        assertEquals((String) actualResult.getOnlyValue(), format(expectedResult, "hive_with_external_writes"));
     }
 
     /**
      * Test view containing IF, IN, LIKE, BETWEEN, CASE, COALESCE, operators, delimited and non-delimited columns, an inline comment
      */
     @Test(groups = HIVE_VIEWS)
-    @Flaky(issue = "https://github.com/trinodb/trino/issues/7535", match = "FAILED: Execution Error, return code 2 from org.apache.hadoop.hive.ql.exec.mr.MapRedTask")
+    @Flaky(issue = ERROR_READING_FROM_HIVE_ISSUE, match = ERROR_READING_FROM_HIVE_MATCH)
     public void testRichSqlSyntax()
     {
         onHive().executeQuery("DROP VIEW IF EXISTS view_with_rich_syntax");
@@ -410,6 +413,33 @@ public abstract class AbstractTestHiveViews
     }
 
     @Test(groups = HIVE_VIEWS)
+    public void testHiveViewWithTextualTypes()
+    {
+        onHive().executeQuery("DROP VIEW IF EXISTS hive_view_textual");
+        onHive().executeQuery("DROP TABLE IF EXISTS hive_table_textual");
+
+        // In Hive, columns with `char` type have a fixed length between 1 and 255, columns with `varchar` type can have a length between 1 and 65535
+        onHive().executeQuery("CREATE TABLE hive_table_textual(a_char_1 char(1), a_char_255 char(255), a_varchar_1 varchar(1), a_varchar_65535 varchar(65535), a_string string)");
+        onHive().executeQuery("CREATE VIEW hive_view_textual AS SELECT * FROM hive_table_textual");
+        onHive().executeQuery("INSERT INTO TABLE hive_table_textual VALUES ('a', 'rainy', 'i', 'calendar', 'Boston Red Sox')");
+
+        assertViewQuery(
+                "SELECT * FROM hive_view_textual",
+                queryAssert -> queryAssert.containsOnly(row("a", padEnd("rainy", 255, ' '), "i", "calendar", "Boston Red Sox")));
+        assertViewQuery(
+                "SELECT a_char_1, a_varchar_65535 FROM hive_view_textual WHERE a_string = 'Boston Red Sox'",
+                queryAssert -> queryAssert.containsOnly(row("a", "calendar")));
+
+        assertThat(onTrino().executeQuery("SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA AND table_name = 'hive_view_textual'"))
+                .containsOnly(getExpectedHiveViewTextualColumnsTypes());
+
+        onHive().executeQuery("DROP VIEW hive_view_textual");
+        onHive().executeQuery("DROP TABLE hive_table_textual");
+    }
+
+    protected abstract List<QueryAssert.Row> getExpectedHiveViewTextualColumnsTypes();
+
+    @Test(groups = HIVE_VIEWS)
     public void testNestedHiveViews()
     {
         onHive().executeQuery("DROP VIEW IF EXISTS nested_base_view");
@@ -452,30 +482,22 @@ public abstract class AbstractTestHiveViews
         unsetSessionProperty("hive_timestamp_nanos.timestamp_precision");
 
         assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM timestamp_hive_view")).containsOnly(row("1990-01-02 12:13:14.123"));
-        assertThatThrownBy(
-                // TODO(https://github.com/trinodb/trino/issues/6295) it is not possible to query Hive view with timestamps if hive.timestamp-precision=NANOSECONDS
-                () -> assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM hive_timestamp_nanos.default.timestamp_hive_view")).containsOnly(row("1990-01-02 12:13:14.123456789"))
-        ).hasMessageContaining("timestamp(9) projected from query view at position 0 cannot be coerced to column [ts] of type timestamp(3) stored in view definition");
+        assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM hive_timestamp_nanos.default.timestamp_hive_view"))
+                .containsOnly(row("1990-01-02 12:13:14.123456789"));
 
         setSessionProperty("hive.timestamp_precision", "'MILLISECONDS'");
         setSessionProperty("hive_timestamp_nanos.timestamp_precision", "'MILLISECONDS'");
 
         assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM timestamp_hive_view")).containsOnly(row("1990-01-02 12:13:14.123"));
-        assertThatThrownBy(
-                // TODO(https://github.com/trinodb/trino/issues/6295) it is not possible to query Hive view with timestamps if hive.timestamp-precision=NANOSECONDS
-                () -> assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM hive_timestamp_nanos.default.timestamp_hive_view")).containsOnly(row("1990-01-02 12:13:14.123"))
-        ).hasMessageContaining("timestamp(9) projected from query view at position 0 cannot be coerced to column [ts] of type timestamp(3) stored in view definition");
+        assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM hive_timestamp_nanos.default.timestamp_hive_view"))
+                .containsOnly(row("1990-01-02 12:13:14.123456789"));
 
         setSessionProperty("hive.timestamp_precision", "'NANOSECONDS'");
         setSessionProperty("hive_timestamp_nanos.timestamp_precision", "'NANOSECONDS'");
 
-        // TODO(https://github.com/trinodb/trino/issues/6295) timestamp_precision has no effect on Hive views
-        // should be: assertThat(query("SELECT CAST(ts AS varchar) FROM timestamp_hive_view")).containsOnly(row("1990-01-02 12:13:14.123456789"))
         assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM timestamp_hive_view")).containsOnly(row("1990-01-02 12:13:14.123"));
-        assertThatThrownBy(
-                // TODO(https://github.com/trinodb/trino/issues/6295) it is not possible to query Hive view with timestamps if hive.timestamp-precision=NANOSECONDS
-                () -> assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM hive_timestamp_nanos.default.timestamp_hive_view")).containsOnly(row("1990-01-02 12:13:14.123456789"))
-        ).hasMessageContaining("timestamp(9) projected from query view at position 0 cannot be coerced to column [ts] of type timestamp(3) stored in view definition");
+        assertThat(onTrino().executeQuery("SELECT CAST(ts AS varchar) FROM hive_timestamp_nanos.default.timestamp_hive_view"))
+                .containsOnly(row("1990-01-02 12:13:14.123456789"));
     }
 
     @Test(groups = HIVE_VIEWS)
@@ -490,8 +512,6 @@ public abstract class AbstractTestHiveViews
     }
 
     @Test(groups = HIVE_VIEWS)
-    // Test is currently flaky on CDH5 environment
-    @Flaky(issue = "https://github.com/trinodb/trino/issues/9074", match = "Error while processing statement: FAILED: Execution Error, return code 2 from org.apache.hadoop.hive.ql.exec.mr.MapRedTask")
     public void testNestedGroupBy()
     {
         onHive().executeQuery("DROP VIEW IF EXISTS test_nested_group_by_view");
@@ -508,6 +528,7 @@ public abstract class AbstractTestHiveViews
     }
 
     @Test(groups = HIVE_VIEWS)
+    @Flaky(issue = ERROR_READING_FROM_HIVE_ISSUE, match = ERROR_READING_FROM_HIVE_MATCH)
     public void testUnionAllViews()
     {
         onHive().executeQuery("DROP TABLE IF EXISTS union_helper");
@@ -543,6 +564,7 @@ public abstract class AbstractTestHiveViews
     }
 
     @Test(groups = HIVE_VIEWS)
+    @Flaky(issue = ERROR_READING_FROM_HIVE_ISSUE, match = ERROR_READING_FROM_HIVE_MATCH)
     public void testUnionDistinctViews()
     {
         if (getHiveVersionMajor() < 1 || (getHiveVersionMajor() == 1 && getHiveVersionMinor() < 2)) {
@@ -575,6 +597,21 @@ public abstract class AbstractTestHiveViews
                     assertion -> assertion.as("View with %s", operator)
                             .containsOnly(row(0), row(1), row(2), row(3), row(4)));
         }
+    }
+
+    @Test(groups = HIVE_VIEWS)
+    public void testHivePartitionViews()
+    {
+        onHive().executeQuery("DROP VIEW IF EXISTS test_view_partitioned_column");
+        onHive().executeQuery("DROP TABLE IF EXISTS test_table_partitioned_column");
+        onTrino().executeQuery("CREATE TABLE test_table_partitioned_column(some_id VARCHAR(25), ds VARCHAR(25)) WITH (partitioned_by=array['ds'])");
+        onTrino().executeQuery("INSERT INTO test_table_partitioned_column VALUES ('1', '2022-09-17')");
+        onHive().executeQuery("CREATE VIEW test_view_partitioned_column PARTITIONED ON (ds) AS SELECT some_id, ds FROM test_table_partitioned_column");
+
+        String testQuery = "SELECT some_id, ds FROM test_view_partitioned_column";
+        assertThat(onTrino().executeQuery(testQuery)).containsOnly(row("1", "2022-09-17"));
+        onHive().executeQuery("DROP VIEW test_view_partitioned_column");
+        onHive().executeQuery("DROP TABLE test_table_partitioned_column");
     }
 
     /**
@@ -688,6 +725,26 @@ public abstract class AbstractTestHiveViews
         onHive().executeQuery("DROP TABLE test_hive_namesake_column_name_a");
         onHive().executeQuery("DROP TABLE test_hive_namesake_column_name_b");
         onHive().executeQuery("DROP VIEW test_namesake_column_names_view");
+    }
+
+    @Test(groups = HIVE_VIEWS)
+    public void testRunAsInvoker()
+    {
+        onTrino().executeQuery("DROP TABLE IF EXISTS run_as_invoker");
+        onTrino().executeQuery("DROP VIEW IF EXISTS run_as_invoker_view");
+
+        onTrino().executeQuery("CREATE TABLE run_as_invoker (a INTEGER)");
+        onHive().executeQuery("CREATE VIEW run_as_invoker_view AS SELECT * FROM run_as_invoker");
+        onTrino().executeQuery("GRANT SELECT ON hive_with_run_view_as_invoker.default.run_as_invoker_view TO hive");
+
+        String definerQuery = "SELECT * FROM hive.default.run_as_invoker_view";
+        String invokerQuery = "SELECT * FROM hive_with_run_view_as_invoker.default.run_as_invoker_view";
+        assertThat(connectToTrino("alice@presto").executeQuery(definerQuery)).hasNoRows(); // Allowed
+        assertThatThrownBy(() -> connectToTrino("alice@presto").executeQuery(invokerQuery))
+                .hasMessageContaining("Access Denied");
+
+        onHive().executeQuery("DROP VIEW run_as_invoker_view");
+        onTrino().executeQuery("DROP TABLE run_as_invoker");
     }
 
     protected static void assertViewQuery(String query, Consumer<QueryAssert> assertion)

@@ -29,8 +29,8 @@ import com.qubole.rubix.prestosql.CachingPrestoSecureAzureBlobFileSystem;
 import com.qubole.rubix.prestosql.CachingPrestoSecureNativeAzureFileSystem;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
+import io.trino.hdfs.HdfsConfigurationInitializer;
 import io.trino.plugin.base.CatalogName;
-import io.trino.plugin.hive.HdfsConfigurationInitializer;
 import io.trino.plugin.hive.util.RetryDriver;
 import io.trino.spi.HostAddress;
 import io.trino.spi.Node;
@@ -47,6 +47,7 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Throwables.propagateIfPossible;
+import static com.google.common.collect.MoreCollectors.onlyElement;
 import static com.qubole.rubix.spi.CacheConfig.enableHeartbeat;
 import static com.qubole.rubix.spi.CacheConfig.setBookKeeperServerPort;
 import static com.qubole.rubix.spi.CacheConfig.setCacheDataDirPrefix;
@@ -62,10 +63,10 @@ import static com.qubole.rubix.spi.CacheConfig.setIsParallelWarmupEnabled;
 import static com.qubole.rubix.spi.CacheConfig.setMetricsReporters;
 import static com.qubole.rubix.spi.CacheConfig.setOnMaster;
 import static com.qubole.rubix.spi.CacheConfig.setPrestoClusterManager;
-import static io.trino.plugin.hive.DynamicConfigurationProvider.setCacheKey;
+import static io.trino.hdfs.ConfigurationUtils.getInitialConfiguration;
+import static io.trino.hdfs.DynamicConfigurationProvider.setCacheKey;
 import static io.trino.plugin.hive.rubix.RubixInitializer.Owner.PRESTO;
 import static io.trino.plugin.hive.rubix.RubixInitializer.Owner.RUBIX;
-import static io.trino.plugin.hive.util.ConfigurationUtils.getInitialConfiguration;
 import static io.trino.plugin.hive.util.RetryDriver.DEFAULT_SCALE_FACTOR;
 import static io.trino.plugin.hive.util.RetryDriver.retry;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
@@ -277,7 +278,9 @@ public class RubixInitializer
 
     private Configuration getRubixServerConfiguration()
     {
-        Node master = nodeManager.getAllNodes().stream().filter(Node::isCoordinator).findFirst().get();
+        Node master = nodeManager.getAllNodes().stream()
+                .filter(Node::isCoordinator)
+                .collect(onlyElement());
         masterAddress = master.getHostAndPort();
 
         Configuration configuration = getInitialConfiguration();

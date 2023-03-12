@@ -16,8 +16,6 @@ package io.trino.plugin.clickhouse;
 import com.google.common.collect.ImmutableMap;
 import io.trino.testing.QueryRunner;
 
-import java.util.OptionalInt;
-
 import static io.trino.plugin.clickhouse.ClickHouseQueryRunner.createClickHouseQueryRunner;
 import static io.trino.plugin.clickhouse.TestingClickHouseServer.CLICKHOUSE_LATEST_IMAGE;
 
@@ -32,16 +30,7 @@ public class TestClickHouseLatestConnectorTest
         return createClickHouseQueryRunner(
                 clickhouseServer,
                 ImmutableMap.of(),
-                ImmutableMap.<String, String>builder()
-                        .put("clickhouse.map-string-as-varchar", "true")
-                        .buildOrThrow(),
+                ImmutableMap.of("clickhouse.map-string-as-varchar", "true"),
                 REQUIRED_TPCH_TABLES);
-    }
-
-    @Override
-    protected OptionalInt maxTableNameLength()
-    {
-        // The numeric value depends on file system
-        return OptionalInt.of(255 - ".sql.detached".length());
     }
 }

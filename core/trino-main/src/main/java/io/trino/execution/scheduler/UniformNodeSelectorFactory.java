@@ -21,13 +21,13 @@ import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.trino.Session;
 import io.trino.collect.cache.NonEvictableCache;
-import io.trino.connector.CatalogName;
 import io.trino.execution.NodeTaskMap;
 import io.trino.execution.scheduler.NodeSchedulerConfig.SplitsBalancingPolicy;
 import io.trino.metadata.InternalNode;
 import io.trino.metadata.InternalNodeManager;
 import io.trino.spi.HostAddress;
 import io.trino.spi.SplitWeight;
+import io.trino.spi.connector.CatalogHandle;
 
 import javax.inject.Inject;
 
@@ -61,7 +61,8 @@ public class UniformNodeSelectorFactory
     private final int minCandidates;
     private final boolean includeCoordinator;
     private final long maxSplitsWeightPerNode;
-    private final long maxPendingSplitsWeightPerTask;
+    private final long minPendingSplitsWeightPerTask;
+    private final long maxAdjustedPendingSplitsWeightPerTask;
     private final SplitsBalancingPolicy splitsBalancingPolicy;
     private final boolean optimizedLocalScheduling;
     private final NodeTaskMap nodeTaskMap;
@@ -83,39 +84,38 @@ public class UniformNodeSelectorFactory
             NodeTaskMap nodeTaskMap,
             Duration nodeMapMemoizationDuration)
     {
-        requireNonNull(nodeManager, "nodeManager is null");
-        requireNonNull(config, "config is null");
-        requireNonNull(nodeTaskMap, "nodeTaskMap is null");
-
-        this.nodeManager = nodeManager;
+        this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
         this.minCandidates = config.getMinCandidates();
         this.includeCoordinator = config.isIncludeCoordinator();
         this.splitsBalancingPolicy = config.getSplitsBalancingPolicy();
         this.optimizedLocalScheduling = config.getOptimizedLocalScheduling();
         this.nodeTaskMap = requireNonNull(nodeTaskMap, "nodeTaskMap is null");
         int maxSplitsPerNode = config.getMaxSplitsPerNode();
-        int maxPendingSplitsPerTask = config.getMaxPendingSplitsPerTask();
-        checkArgument(maxSplitsPerNode >= maxPendingSplitsPerTask, "maxSplitsPerNode must be > maxPendingSplitsPerTask");
+        int minPendingSplitsPerTask = config.getMinPendingSplitsPerTask();
+        int maxAdjustedPendingSplitsWeightPerTask = config.getMaxAdjustedPendingSplitsWeightPerTask();
+        checkArgument(maxSplitsPerNode >= minPendingSplitsPerTask, "maxSplitsPerNode must be > minPendingSplitsPerTask");
+        checkArgument(maxAdjustedPendingSplitsWeightPerTask >= minPendingSplitsPerTask, "maxPendingSplitsPerTask must be >= minPendingSplitsPerTask");
         this.maxSplitsWeightPerNode = SplitWeight.rawValueForStandardSplitCount(maxSplitsPerNode);
-        this.maxPendingSplitsWeightPerTask = SplitWeight.rawValueForStandardSplitCount(maxPendingSplitsPerTask);
+        this.minPendingSplitsWeightPerTask = SplitWeight.rawValueForStandardSplitCount(minPendingSplitsPerTask);
+        this.maxAdjustedPendingSplitsWeightPerTask = SplitWeight.rawValueForStandardSplitCount(maxAdjustedPendingSplitsWeightPerTask);
         this.nodeMapMemoizationDuration = nodeMapMemoizationDuration;
     }
 
     @Override
-    public NodeSelector createNodeSelector(Session session, Optional<CatalogName> catalogName)
+    public NodeSelector createNodeSelector(Session session, Optional<CatalogHandle> catalogHandle)
     {
-        requireNonNull(catalogName, "catalogName is null");
+        requireNonNull(catalogHandle, "catalogHandle is null");
 
         // this supplier is thread-safe. TODO: this logic should probably move to the scheduler since the choice of which node to run in should be
         // done as close to when the split is about to be scheduled
         Supplier<NodeMap> nodeMap;
         if (nodeMapMemoizationDuration.toMillis() > 0) {
             nodeMap = Suppliers.memoizeWithExpiration(
-                    () -> createNodeMap(catalogName),
+                    () -> createNodeMap(catalogHandle),
                     nodeMapMemoizationDuration.toMillis(), MILLISECONDS);
         }
         else {
-            nodeMap = () -> createNodeMap(catalogName);
+            nodeMap = () -> createNodeMap(catalogHandle);
         }
 
         return new UniformNodeSelector(
@@ -125,16 +125,17 @@ public class UniformNodeSelectorFactory
                 nodeMap,
                 minCandidates,
                 maxSplitsWeightPerNode,
-                maxPendingSplitsWeightPerTask,
+                minPendingSplitsWeightPerTask,
+                maxAdjustedPendingSplitsWeightPerTask,
                 getMaxUnacknowledgedSplitsPerTask(session),
                 splitsBalancingPolicy,
                 optimizedLocalScheduling);
     }
 
-    private NodeMap createNodeMap(Optional<CatalogName> catalogName)
+    private NodeMap createNodeMap(Optional<CatalogHandle> catalogHandle)
     {
-        Set<InternalNode> nodes = catalogName
-                .map(nodeManager::getActiveConnectorNodes)
+        Set<InternalNode> nodes = catalogHandle
+                .map(nodeManager::getActiveCatalogNodes)
                 .orElseGet(() -> nodeManager.getNodes(ACTIVE));
 
         Set<String> coordinatorNodeIds = nodeManager.getCoordinators().stream()

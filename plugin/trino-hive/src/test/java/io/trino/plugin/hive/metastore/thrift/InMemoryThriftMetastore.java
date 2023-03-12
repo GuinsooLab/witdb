@@ -16,6 +16,13 @@ package io.trino.plugin.hive.metastore.thrift;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import io.trino.hive.thrift.metastore.Database;
+import io.trino.hive.thrift.metastore.FieldSchema;
+import io.trino.hive.thrift.metastore.Partition;
+import io.trino.hive.thrift.metastore.PrincipalPrivilegeSet;
+import io.trino.hive.thrift.metastore.PrincipalType;
+import io.trino.hive.thrift.metastore.Table;
+import io.trino.plugin.hive.HiveColumnStatisticType;
 import io.trino.plugin.hive.PartitionStatistics;
 import io.trino.plugin.hive.SchemaAlreadyExistsException;
 import io.trino.plugin.hive.TableAlreadyExistsException;
@@ -30,16 +37,9 @@ import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
-import io.trino.spi.statistics.ColumnStatisticType;
 import io.trino.spi.type.Type;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.metastore.TableType;
-import org.apache.hadoop.hive.metastore.api.Database;
-import org.apache.hadoop.hive.metastore.api.FieldSchema;
-import org.apache.hadoop.hive.metastore.api.Partition;
-import org.apache.hadoop.hive.metastore.api.PrincipalPrivilegeSet;
-import org.apache.hadoop.hive.metastore.api.PrincipalType;
-import org.apache.hadoop.hive.metastore.api.Table;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -58,7 +58,6 @@ import java.util.function.Function;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.collect.ImmutableList.builder;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.io.MoreFiles.deleteRecursively;
@@ -236,7 +235,7 @@ public class InMemoryThriftMetastore
 
     private static List<String> listAllDataPaths(ThriftMetastore metastore, String schemaName, String tableName)
     {
-        ImmutableList.Builder<String> locations = builder();
+        ImmutableList.Builder<String> locations = ImmutableList.builder();
         Table table = metastore.getTable(schemaName, tableName).get();
         if (table.getSd().getLocation() != null) {
             // For unpartitioned table, there should be nothing directly under this directory.
@@ -413,7 +412,7 @@ public class InMemoryThriftMetastore
     @Override
     public synchronized List<Partition> getPartitionsByNames(String databaseName, String tableName, List<String> partitionNames)
     {
-        ImmutableList.Builder<Partition> builder = builder();
+        ImmutableList.Builder<Partition> builder = ImmutableList.builder();
         for (String name : partitionNames) {
             PartitionName partitionName = PartitionName.partition(databaseName, tableName, name);
             Partition partition = partitions.get(partitionName);
@@ -433,7 +432,7 @@ public class InMemoryThriftMetastore
     }
 
     @Override
-    public Set<ColumnStatisticType> getSupportedColumnStatistics(Type type)
+    public Set<HiveColumnStatisticType> getSupportedColumnStatistics(Type type)
     {
         return ThriftMetastoreUtil.getSupportedColumnStatistics(type);
     }
@@ -582,8 +581,8 @@ public class InMemoryThriftMetastore
 
         private PartitionName(String schemaName, String tableName, List<String> partitionValues, String partitionName)
         {
-            this.schemaName = requireNonNull(schemaName, "schemaName is null").toLowerCase(US);
-            this.tableName = requireNonNull(tableName, "tableName is null").toLowerCase(US);
+            this.schemaName = schemaName.toLowerCase(US);
+            this.tableName = tableName.toLowerCase(US);
             this.partitionValues = requireNonNull(partitionValues, "partitionValues is null");
             this.partitionName = partitionName;
         }

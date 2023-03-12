@@ -17,8 +17,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.spi.TrinoException;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.CatalogSchemaName;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.ConnectorTableMetadata;
@@ -104,7 +104,7 @@ public final class MetadataUtil
         return null;
     }
 
-    public static CatalogName getRequiredCatalogHandle(Metadata metadata, Session session, Node node, String catalogName)
+    public static CatalogHandle getRequiredCatalogHandle(Metadata metadata, Session session, Node node, String catalogName)
     {
         return metadata.getCatalogHandle(session, catalogName)
                 .orElseThrow(() -> semanticException(CATALOG_NOT_FOUND, node, "Catalog '%s' does not exist", catalogName));

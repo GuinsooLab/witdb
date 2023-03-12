@@ -16,9 +16,10 @@ package io.trino.testing.containers;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.net.HostAndPort;
+import dev.failsafe.Failsafe;
+import dev.failsafe.RetryPolicy;
 import io.airlift.log.Logger;
-import net.jodah.failsafe.Failsafe;
-import net.jodah.failsafe.RetryPolicy;
+import io.trino.testing.ResourcePresence;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
@@ -87,7 +88,7 @@ public abstract class BaseTestContainer
                 .withStartupCheckStrategy(new IsRunningStartupCheckStrategy())
                 .waitingFor(Wait.forListeningPort())
                 .withStartupTimeout(Duration.ofMinutes(5));
-        network.ifPresent(container::withNetwork);
+        network.ifPresent(net -> container.withNetwork(net).withNetworkAliases(hostName));
     }
 
     protected void withRunCommand(List<String> runCommand)
@@ -119,13 +120,14 @@ public abstract class BaseTestContainer
 
     public void start()
     {
-        Failsafe.with(new RetryPolicy<>()
+        Failsafe.with(RetryPolicy.builder()
                         .withMaxRetries(startupRetryLimit)
                         .onRetry(event -> log.warn(
                                 "%s initialization failed (attempt %s), will retry. Exception: %s",
                                 this.getClass().getSimpleName(),
                                 event.getAttemptCount(),
-                                event.getLastFailure().getMessage())))
+                                event.getLastException().getMessage()))
+                        .build())
                 .get(() -> TestContainers.startOrReuse(this.container));
     }
 
@@ -134,7 +136,7 @@ public abstract class BaseTestContainer
         container.stop();
     }
 
-    public void executeInContainerFailOnError(String... commandAndArgs)
+    public String executeInContainerFailOnError(String... commandAndArgs)
     {
         Container.ExecResult execResult = executeInContainer(commandAndArgs);
         if (execResult.getExitCode() != 0) {
@@ -144,6 +146,7 @@ public abstract class BaseTestContainer
             log.error("stdout: %s", execResult.getStdout());
             throw new RuntimeException(message);
         }
+        return execResult.getStdout();
     }
 
     public Container.ExecResult executeInContainer(String... commandAndArgs)
@@ -160,6 +163,12 @@ public abstract class BaseTestContainer
     public void close()
     {
         stop();
+    }
+
+    @ResourcePresence
+    public boolean isPresent()
+    {
+        return container.isRunning() || container.getContainerId() != null;
     }
 
     protected abstract static class Builder<SELF extends BaseTestContainer.Builder<SELF, BUILD>, BUILD extends BaseTestContainer>

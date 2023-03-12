@@ -17,6 +17,8 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import dev.failsafe.Failsafe;
+import dev.failsafe.RetryPolicy;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer;
 import io.confluent.kafka.serializers.subject.RecordNameStrategy;
@@ -25,8 +27,6 @@ import io.trino.sql.query.QueryAssertions;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.kafka.TestingKafka;
-import net.jodah.failsafe.Failsafe;
-import net.jodah.failsafe.RetryPolicy;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericRecord;
@@ -42,7 +42,7 @@ import java.util.stream.IntStream;
 
 import static io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG;
 import static io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig.VALUE_SUBJECT_NAME_STRATEGY;
-import static io.trino.testing.sql.TestTable.randomTableSuffix;
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.lang.Math.multiplyExact;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
@@ -79,16 +79,14 @@ public class TestKafkaWithConfluentSchemaRegistryMinimalFunctionality
     {
         testingKafka = closeAfterClass(TestingKafka.createWithSchemaRegistry());
         return KafkaWithConfluentSchemaRegistryQueryRunner.builder(testingKafka)
-                .setExtraKafkaProperties(ImmutableMap.<String, String>builder()
-                        .put("kafka.confluent-subjects-cache-refresh-interval", "1ms")
-                        .buildOrThrow())
+                .setExtraKafkaProperties(ImmutableMap.of("kafka.confluent-subjects-cache-refresh-interval", "1ms"))
                 .build();
     }
 
     @Test
     public void testBasicTopic()
     {
-        String topic = "topic-basic-MixedCase-" + randomTableSuffix();
+        String topic = "topic-basic-MixedCase-" + randomNameSuffix();
         assertTopic(
                 testingKafka, topic,
                 format("SELECT col_1, col_2 FROM %s", toDoubleQuoted(topic)),
@@ -103,7 +101,7 @@ public class TestKafkaWithConfluentSchemaRegistryMinimalFunctionality
     @Test
     public void testTopicWithKeySubject()
     {
-        String topic = "topic-Key-Subject-" + randomTableSuffix();
+        String topic = "topic-Key-Subject-" + randomNameSuffix();
         assertTopic(
                 testingKafka, topic,
                 format("SELECT \"%s-key\", col_1, col_2 FROM %s", topic, toDoubleQuoted(topic)),
@@ -118,7 +116,7 @@ public class TestKafkaWithConfluentSchemaRegistryMinimalFunctionality
     @Test
     public void testTopicWithRecordNameStrategy()
     {
-        String topic = "topic-Record-Name-Strategy-" + randomTableSuffix();
+        String topic = "topic-Record-Name-Strategy-" + randomNameSuffix();
         assertTopic(
                 testingKafka, topic,
                 format("SELECT \"%1$s-key\", col_1, col_2 FROM \"%1$s&value-subject=%2$s\"", topic, RECORD_NAME),
@@ -134,7 +132,7 @@ public class TestKafkaWithConfluentSchemaRegistryMinimalFunctionality
     @Test
     public void testTopicWithTopicRecordNameStrategy()
     {
-        String topic = "topic-Topic-Record-Name-Strategy-" + randomTableSuffix();
+        String topic = "topic-Topic-Record-Name-Strategy-" + randomNameSuffix();
         assertTopic(
                 testingKafka, topic,
                 format("SELECT \"%1$s-key\", col_1, col_2 FROM \"%1$s&value-subject=%1$s-%2$s\"", topic, RECORD_NAME),
@@ -150,7 +148,7 @@ public class TestKafkaWithConfluentSchemaRegistryMinimalFunctionality
     @Test
     public void testUnsupportedInsert()
     {
-        String topicName = "topic-unsupported-insert-" + randomTableSuffix();
+        String topicName = "topic-unsupported-insert-" + randomNameSuffix();
 
         assertNotExists(topicName);
 
@@ -171,7 +169,7 @@ public class TestKafkaWithConfluentSchemaRegistryMinimalFunctionality
     @Test
     public void testUnsupportedFormat()
     {
-        String topicName = "topic-unsupported-format-" + randomTableSuffix();
+        String topicName = "topic-unsupported-format-" + randomNameSuffix();
 
         assertNotExists(topicName);
 
@@ -287,14 +285,16 @@ public class TestKafkaWithConfluentSchemaRegistryMinimalFunctionality
     private void waitUntilTableExists(String tableName)
     {
         Failsafe.with(
-                new RetryPolicy<>()
+                RetryPolicy.builder()
                         .withMaxAttempts(10)
-                        .withDelay(Duration.ofMillis(100)))
+                        .withDelay(Duration.ofMillis(100))
+                        .build())
                 .run(() -> assertTrue(schemaExists()));
         Failsafe.with(
-                new RetryPolicy<>()
+                RetryPolicy.builder()
                         .withMaxAttempts(10)
-                        .withDelay(Duration.ofMillis(100)))
+                        .withDelay(Duration.ofMillis(100))
+                        .build())
                 .run(() -> assertTrue(tableExists(tableName)));
     }
 

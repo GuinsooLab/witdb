@@ -15,8 +15,7 @@ package io.trino.server;
 
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
-import io.trino.connector.CatalogName;
-import io.trino.connector.ConnectorManager;
+import io.trino.connector.CatalogFactory;
 import io.trino.eventlistener.EventListenerManager;
 import io.trino.exchange.ExchangeManagerRegistry;
 import io.trino.execution.resourcegroups.ResourceGroupManager;
@@ -34,6 +33,7 @@ import io.trino.server.security.PasswordAuthenticatorManager;
 import io.trino.spi.Plugin;
 import io.trino.spi.block.BlockEncoding;
 import io.trino.spi.classloader.ThreadContextClassLoader;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorFactory;
 import io.trino.spi.eventlistener.EventListenerFactory;
 import io.trino.spi.exchange.ExchangeManagerFactory;
@@ -65,6 +65,7 @@ import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
 public class PluginManager
+        implements PluginInstaller
 {
     private static final ImmutableList<String> SPI_PACKAGES = ImmutableList.<String>builder()
             .add("io.trino.spi.")
@@ -76,7 +77,7 @@ public class PluginManager
     private static final Logger log = Logger.get(PluginManager.class);
 
     private final PluginsProvider pluginsProvider;
-    private final ConnectorManager connectorManager;
+    private final CatalogFactory connectorFactory;
     private final GlobalFunctionCatalog globalFunctionCatalog;
     private final ResourceGroupManager<?> resourceGroupManager;
     private final AccessControlManager accessControlManager;
@@ -95,7 +96,7 @@ public class PluginManager
     @Inject
     public PluginManager(
             PluginsProvider pluginsProvider,
-            ConnectorManager connectorManager,
+            CatalogFactory connectorFactory,
             GlobalFunctionCatalog globalFunctionCatalog,
             ResourceGroupManager<?> resourceGroupManager,
             AccessControlManager accessControlManager,
@@ -111,7 +112,7 @@ public class PluginManager
             ExchangeManagerRegistry exchangeManagerRegistry)
     {
         this.pluginsProvider = requireNonNull(pluginsProvider, "pluginsProvider is null");
-        this.connectorManager = requireNonNull(connectorManager, "connectorManager is null");
+        this.connectorFactory = requireNonNull(connectorFactory, "connectorFactory is null");
         this.globalFunctionCatalog = requireNonNull(globalFunctionCatalog, "globalFunctionCatalog is null");
         this.resourceGroupManager = requireNonNull(resourceGroupManager, "resourceGroupManager is null");
         this.accessControlManager = requireNonNull(accessControlManager, "accessControlManager is null");
@@ -127,6 +128,7 @@ public class PluginManager
         this.exchangeManagerRegistry = requireNonNull(exchangeManagerRegistry, "exchangeManagerRegistry is null");
     }
 
+    @Override
     public void loadPlugins()
     {
         if (!pluginsLoading.compareAndSet(false, true)) {
@@ -169,13 +171,14 @@ public class PluginManager
         }
     }
 
-    public void installPlugin(Plugin plugin, Function<CatalogName, ClassLoader> duplicatePluginClassLoaderFactory)
+    @Override
+    public void installPlugin(Plugin plugin, Function<CatalogHandle, ClassLoader> duplicatePluginClassLoaderFactory)
     {
         installPluginInternal(plugin, duplicatePluginClassLoaderFactory);
         typeRegistry.verifyTypes();
     }
 
-    private void installPluginInternal(Plugin plugin, Function<CatalogName, ClassLoader> duplicatePluginClassLoaderFactory)
+    private void installPluginInternal(Plugin plugin, Function<CatalogHandle, ClassLoader> duplicatePluginClassLoaderFactory)
     {
         for (BlockEncoding blockEncoding : plugin.getBlockEncodings()) {
             log.info("Registering block encoding %s", blockEncoding.getName());
@@ -194,7 +197,7 @@ public class PluginManager
 
         for (ConnectorFactory connectorFactory : plugin.getConnectorFactories()) {
             log.info("Registering connector %s", connectorFactory.getName());
-            connectorManager.addConnectorFactory(connectorFactory, duplicatePluginClassLoaderFactory);
+            this.connectorFactory.addConnectorFactory(connectorFactory, duplicatePluginClassLoaderFactory);
         }
 
         Set<Class<?>> functions = plugin.getFunctions();

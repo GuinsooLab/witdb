@@ -26,16 +26,16 @@ import com.qubole.rubix.prestosql.CachingPrestoGoogleHadoopFileSystem;
 import com.qubole.rubix.prestosql.CachingPrestoSecureAzureBlobFileSystem;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.trino.hdfs.DynamicHdfsConfiguration;
+import io.trino.hdfs.HdfsConfig;
+import io.trino.hdfs.HdfsConfigurationInitializer;
+import io.trino.hdfs.HdfsContext;
+import io.trino.hdfs.HdfsEnvironment;
+import io.trino.hdfs.authentication.HdfsAuthenticationConfig;
+import io.trino.hdfs.authentication.NoHdfsAuthentication;
 import io.trino.metadata.InternalNode;
 import io.trino.plugin.base.CatalogName;
-import io.trino.plugin.hive.HdfsConfig;
-import io.trino.plugin.hive.HdfsConfigurationInitializer;
-import io.trino.plugin.hive.HdfsEnvironment;
-import io.trino.plugin.hive.HdfsEnvironment.HdfsContext;
 import io.trino.plugin.hive.HiveConfig;
-import io.trino.plugin.hive.HiveHdfsConfiguration;
-import io.trino.plugin.hive.authentication.HdfsAuthenticationConfig;
-import io.trino.plugin.hive.authentication.NoHdfsAuthentication;
 import io.trino.plugin.hive.orc.OrcReaderConfig;
 import io.trino.plugin.hive.rubix.RubixConfig.ReadMode;
 import io.trino.plugin.hive.rubix.RubixModule.DefaultRubixHdfsInitializer;
@@ -50,6 +50,7 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
+import org.gaul.modernizer_maven_annotations.SuppressModernizer;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
@@ -100,8 +101,8 @@ public class TestRubixCaching
 {
     private static final DataSize SMALL_FILE_SIZE = DataSize.of(1, MEGABYTE);
     private static final DataSize LARGE_FILE_SIZE = DataSize.of(100, MEGABYTE);
-    private static final MBeanServer BEAN_SERVER = ManagementFactory.getPlatformMBeanServer();
 
+    private MBeanServer mBeanServer;
     private java.nio.file.Path tempDirectory;
     private Path cacheStoragePath;
     private HdfsConfig config;
@@ -115,11 +116,12 @@ public class TestRubixCaching
     public void setup()
             throws IOException
     {
+        mBeanServer = ManagementFactory.getPlatformMBeanServer();
+
         cacheStoragePath = getStoragePath("/");
         config = new HdfsConfig();
         List<PropertyMetadata<?>> hiveSessionProperties = getHiveSessionProperties(
                 new HiveConfig(),
-                new RubixEnabledConfig().setCacheEnabled(true),
                 new OrcReaderConfig()).getSessionProperties();
         context = new HdfsContext(
                 TestingConnectorSession.builder()
@@ -141,7 +143,7 @@ public class TestRubixCaching
             throws IOException
     {
         HdfsConfigurationInitializer configurationInitializer = new HdfsConfigurationInitializer(config);
-        HiveHdfsConfiguration configuration = new HiveHdfsConfiguration(configurationInitializer, ImmutableSet.of());
+        DynamicHdfsConfiguration configuration = new DynamicHdfsConfiguration(configurationInitializer, ImmutableSet.of());
         HdfsEnvironment environment = new HdfsEnvironment(configuration, config, new NoHdfsAuthentication());
         return environment.getFileSystem(context, cacheStoragePath);
     }
@@ -215,7 +217,7 @@ public class TestRubixCaching
             throws IOException
     {
         HdfsConfigurationInitializer configurationInitializer = new HdfsConfigurationInitializer(config, ImmutableSet.of());
-        HiveHdfsConfiguration configuration = new HiveHdfsConfiguration(
+        DynamicHdfsConfiguration configuration = new DynamicHdfsConfiguration(
                 configurationInitializer,
                 ImmutableSet.of(
                         rubixConfigInitializer,
@@ -235,7 +237,9 @@ public class TestRubixCaching
     public void tearDown()
             throws IOException
     {
-        nonCachingFileSystem.close();
+        closeFileSystem(nonCachingFileSystem);
+        nonCachingFileSystem = null;
+        mBeanServer = null;
     }
 
     @AfterMethod(alwaysRun = true)
@@ -251,7 +255,7 @@ public class TestRubixCaching
             });
             closer.register(() -> {
                 if (cachingFileSystem != null) {
-                    cachingFileSystem.close();
+                    closeFileSystem(cachingFileSystem);
                     cachingFileSystem = null;
                 }
             });
@@ -272,6 +276,13 @@ public class TestRubixCaching
                 }
             });
         }
+    }
+
+    @SuppressModernizer
+    private static void closeFileSystem(FileSystem fileSystem)
+            throws IOException
+    {
+        fileSystem.close();
     }
 
     @DataProvider
@@ -469,6 +480,7 @@ public class TestRubixCaching
                 });
     }
 
+    @SuppressModernizer
     @Test
     public void testFileSystemBindings()
             throws Exception
@@ -548,8 +560,8 @@ public class TestRubixCaching
     private long getRemoteReadsCount()
     {
         try {
-            long directRemoteReads = (long) BEAN_SERVER.getAttribute(new ObjectName("rubix:name=stats,type=detailed,catalog=catalog"), "Direct_rrc_requests");
-            long remoteReads = (long) BEAN_SERVER.getAttribute(new ObjectName("rubix:name=stats,type=detailed,catalog=catalog"), "Remote_rrc_requests");
+            long directRemoteReads = (long) mBeanServer.getAttribute(new ObjectName("rubix:name=stats,type=detailed,catalog=catalog"), "Direct_rrc_requests");
+            long remoteReads = (long) mBeanServer.getAttribute(new ObjectName("rubix:name=stats,type=detailed,catalog=catalog"), "Remote_rrc_requests");
             return directRemoteReads + remoteReads;
         }
         catch (Exception exception) {
@@ -560,7 +572,7 @@ public class TestRubixCaching
     private long getCachedReadsCount()
     {
         try {
-            return (long) BEAN_SERVER.getAttribute(new ObjectName("rubix:name=stats,type=detailed,catalog=catalog"), "Cached_rrc_requests");
+            return (long) mBeanServer.getAttribute(new ObjectName("rubix:name=stats,type=detailed,catalog=catalog"), "Cached_rrc_requests");
         }
         catch (Exception exception) {
             throw new RuntimeException(exception);
@@ -574,7 +586,7 @@ public class TestRubixCaching
         }
 
         try {
-            return (long) BEAN_SERVER.getAttribute(new ObjectName("metrics:name=rubix.bookkeeper.count.async_downloaded_mb"), "Count");
+            return (long) mBeanServer.getAttribute(new ObjectName("metrics:name=rubix.bookkeeper.count.async_downloaded_mb"), "Count");
         }
         catch (Exception exception) {
             throw new RuntimeException(exception);

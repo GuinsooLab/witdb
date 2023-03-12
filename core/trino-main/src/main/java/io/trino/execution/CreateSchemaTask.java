@@ -16,12 +16,12 @@ package io.trino.execution;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.SchemaPropertyManager;
 import io.trino.security.AccessControl;
 import io.trino.spi.TrinoException;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.CatalogSchemaName;
 import io.trino.spi.security.PrincipalType;
 import io.trino.spi.security.TrinoPrincipal;
@@ -34,16 +34,22 @@ import javax.inject.Inject;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
 
+import static com.google.common.base.Verify.verify;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
+import static io.trino.execution.ParameterExtractor.bindParameters;
 import static io.trino.metadata.MetadataUtil.checkRoleExists;
 import static io.trino.metadata.MetadataUtil.createCatalogSchemaName;
 import static io.trino.metadata.MetadataUtil.createPrincipal;
 import static io.trino.metadata.MetadataUtil.getRequiredCatalogHandle;
 import static io.trino.spi.StandardErrorCode.ALREADY_EXISTS;
 import static io.trino.spi.StandardErrorCode.SCHEMA_ALREADY_EXISTS;
-import static io.trino.sql.ParameterUtils.parameterExtractor;
 import static io.trino.sql.analyzer.SemanticExceptions.semanticException;
+import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 
 public class CreateSchemaTask
@@ -88,9 +94,28 @@ public class CreateSchemaTask
     {
         CatalogSchemaName schema = createCatalogSchemaName(session, statement, Optional.of(statement.getSchemaName()));
 
-        // TODO: validate that catalog exists
+        String catalogName = schema.getCatalogName();
+        CatalogHandle catalogHandle = getRequiredCatalogHandle(plannerContext.getMetadata(), session, statement, catalogName);
 
-        accessControl.checkCanCreateSchema(session.toSecurityContext(), schema);
+        Map<String, Object> properties = schemaPropertyManager.getProperties(
+                catalogName,
+                catalogHandle,
+                statement.getProperties(),
+                session,
+                plannerContext,
+                accessControl,
+                bindParameters(statement, parameters),
+                true);
+
+        Set<String> specifiedPropertyKeys = statement.getProperties().stream()
+                // property names are case-insensitive and normalized to lower case
+                .map(property -> property.getName().getValue().toLowerCase(ENGLISH))
+                .collect(toImmutableSet());
+        Map<String, Object> explicitlySetProperties = properties.keySet().stream()
+                .peek(key -> verify(key.equals(key.toLowerCase(ENGLISH)), "Property name '%s' not in lower-case", key))
+                .filter(specifiedPropertyKeys::contains)
+                .collect(toImmutableMap(Function.identity(), properties::get));
+        accessControl.checkCanCreateSchema(session.toSecurityContext(), schema, explicitlySetProperties);
 
         if (plannerContext.getMetadata().schemaExists(session, schema)) {
             if (!statement.isNotExists()) {
@@ -99,18 +124,7 @@ public class CreateSchemaTask
             return immediateVoidFuture();
         }
 
-        CatalogName catalogName = getRequiredCatalogHandle(plannerContext.getMetadata(), session, statement, schema.getCatalogName());
-
-        Map<String, Object> properties = schemaPropertyManager.getProperties(
-                catalogName,
-                statement.getProperties(),
-                session,
-                plannerContext,
-                accessControl,
-                parameterExtractor(statement, parameters),
-                true);
-
-        TrinoPrincipal principal = getCreatePrincipal(statement, session, plannerContext.getMetadata(), catalogName.getCatalogName());
+        TrinoPrincipal principal = getCreatePrincipal(statement, session, plannerContext.getMetadata(), catalogName);
         try {
             plannerContext.getMetadata().createSchema(session, schema, properties, principal);
         }

@@ -18,7 +18,6 @@ import com.google.common.collect.ImmutableSet;
 import io.airlift.slice.Slice;
 import io.airlift.stats.Distribution;
 import io.airlift.units.DataSize;
-import io.trino.connector.CatalogName;
 import io.trino.hive.orc.NullMemoryManager;
 import io.trino.hive.orc.impl.WriterImpl;
 import io.trino.metadata.FunctionManager;
@@ -103,11 +102,12 @@ import static io.trino.plugin.hive.HiveColumnHandle.ColumnType.PARTITION_KEY;
 import static io.trino.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static io.trino.plugin.hive.HiveColumnHandle.createBaseColumn;
 import static io.trino.plugin.hive.HivePageSourceProvider.ColumnMapping.buildColumnMappings;
-import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_FACTORY;
 import static io.trino.plugin.hive.HiveTestUtils.SESSION;
 import static io.trino.plugin.hive.acid.AcidTransaction.NO_ACID_TRANSACTION;
 import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.trino.sql.relational.Expressions.field;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_HANDLE;
 import static io.trino.testing.TestingHandles.TEST_TABLE_HANDLE;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static io.trino.testing.TestingTaskContext.createTaskContext;
@@ -324,6 +324,7 @@ public class TestOrcPageSourceMemoryTracking
         int maxReadBytes = 1_000;
         HiveSessionProperties hiveSessionProperties = new HiveSessionProperties(
                 new HiveConfig(),
+                new HiveFormatsConfig(),
                 new OrcReaderConfig()
                         .setMaxBlockSize(DataSize.ofBytes(maxReadBytes)),
                 new OrcWriterConfig(),
@@ -551,7 +552,7 @@ public class TestOrcPageSourceMemoryTracking
 
         public ConnectorPageSource newPageSource(FileFormatDataSourceStats stats, ConnectorSession session)
         {
-            OrcPageSourceFactory orcPageSourceFactory = new OrcPageSourceFactory(new OrcReaderOptions(), HDFS_ENVIRONMENT, stats, UTC);
+            OrcPageSourceFactory orcPageSourceFactory = new OrcPageSourceFactory(new OrcReaderOptions(), HDFS_FILE_SYSTEM_FACTORY, stats, UTC);
 
             List<HivePageSourceProvider.ColumnMapping> columnMappings = buildColumnMappings(
                     partitionName,
@@ -598,7 +599,7 @@ public class TestOrcPageSourceMemoryTracking
                     columns.stream().map(ColumnHandle.class::cast).collect(toImmutableList()),
                     DynamicFilter.EMPTY);
             SourceOperator operator = sourceOperatorFactory.createOperator(driverContext);
-            operator.addSplit(new Split(new CatalogName("test"), TestingSplit.createLocalSplit()));
+            operator.addSplit(new Split(TEST_CATALOG_HANDLE, TestingSplit.createLocalSplit()));
             return operator;
         }
 
@@ -625,7 +626,7 @@ public class TestOrcPageSourceMemoryTracking
                     DataSize.ofBytes(0),
                     0);
             SourceOperator operator = sourceOperatorFactory.createOperator(driverContext);
-            operator.addSplit(new Split(new CatalogName("test"), TestingSplit.createLocalSplit()));
+            operator.addSplit(new Split(TEST_CATALOG_HANDLE, TestingSplit.createLocalSplit()));
             operator.noMoreSplits();
             return operator;
         }

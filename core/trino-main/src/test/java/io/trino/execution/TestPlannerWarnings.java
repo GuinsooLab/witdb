@@ -48,6 +48,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.trino.sql.planner.LogicalPlanner.Stage.OPTIMIZED;
 import static io.trino.sql.planner.plan.Patterns.project;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.IntStream.range;
@@ -61,7 +62,7 @@ public class TestPlannerWarnings
     public void setUp()
     {
         queryRunner = LocalQueryRunner.create(testSessionBuilder()
-                .setCatalog("local")
+                .setCatalog(TEST_CATALOG_NAME)
                 .setSchema("tiny")
                 .build());
 
@@ -75,6 +76,7 @@ public class TestPlannerWarnings
     public void tearDown()
     {
         queryRunner.close();
+        queryRunner = null;
     }
 
     @Test
@@ -160,8 +162,7 @@ public class TestPlannerWarnings
         @Override
         public Result apply(ProjectNode node, Captures captures, Context context)
         {
-            warnings.stream()
-                    .forEach(context.getWarningCollector()::add);
+            warnings.forEach(context.getWarningCollector()::add);
             return Result.empty();
         }
     }

@@ -15,13 +15,13 @@ package io.trino.execution;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.ColumnPropertyManager;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.RedirectionAwareTableHandle;
 import io.trino.metadata.TableHandle;
 import io.trino.security.AccessControl;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.type.Type;
@@ -37,15 +37,14 @@ import java.util.List;
 import java.util.Map;
 
 import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
+import static io.trino.execution.ParameterExtractor.bindParameters;
 import static io.trino.metadata.MetadataUtil.createQualifiedObjectName;
-import static io.trino.metadata.MetadataUtil.getRequiredCatalogHandle;
 import static io.trino.spi.StandardErrorCode.COLUMN_ALREADY_EXISTS;
 import static io.trino.spi.StandardErrorCode.COLUMN_TYPE_UNKNOWN;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.StandardErrorCode.TABLE_NOT_FOUND;
 import static io.trino.spi.StandardErrorCode.TYPE_NOT_FOUND;
 import static io.trino.spi.connector.ConnectorCapabilities.NOT_NULL_COLUMN_CONSTRAINT;
-import static io.trino.sql.ParameterUtils.parameterExtractor;
 import static io.trino.sql.analyzer.SemanticExceptions.semanticException;
 import static io.trino.sql.analyzer.TypeSignatureTranslator.toTypeSignature;
 import static io.trino.type.UnknownType.UNKNOWN;
@@ -90,7 +89,7 @@ public class AddColumnTask
             return immediateVoidFuture();
         }
         TableHandle tableHandle = redirectionAwareTableHandle.getTableHandle().get();
-        CatalogName catalogName = getRequiredCatalogHandle(plannerContext.getMetadata(), session, statement, tableHandle.getCatalogName().getCatalogName());
+        CatalogHandle catalogHandle = tableHandle.getCatalogHandle();
 
         accessControl.checkCanAddColumns(session.toSecurityContext(), redirectionAwareTableHandle.getRedirectedTableName().orElse(originalTableName));
 
@@ -113,16 +112,17 @@ public class AddColumnTask
             }
             return immediateVoidFuture();
         }
-        if (!element.isNullable() && !plannerContext.getMetadata().getConnectorCapabilities(session, catalogName).contains(NOT_NULL_COLUMN_CONSTRAINT)) {
-            throw semanticException(NOT_SUPPORTED, element, "Catalog '%s' does not support NOT NULL for column '%s'", catalogName.getCatalogName(), element.getName());
+        if (!element.isNullable() && !plannerContext.getMetadata().getConnectorCapabilities(session, catalogHandle).contains(NOT_NULL_COLUMN_CONSTRAINT)) {
+            throw semanticException(NOT_SUPPORTED, element, "Catalog '%s' does not support NOT NULL for column '%s'", catalogHandle, element.getName());
         }
         Map<String, Object> columnProperties = columnPropertyManager.getProperties(
-                catalogName,
+                catalogHandle.getCatalogName(),
+                catalogHandle,
                 element.getProperties(),
                 session,
                 plannerContext,
                 accessControl,
-                parameterExtractor(statement, parameters),
+                bindParameters(statement, parameters),
                 true);
 
         ColumnMetadata column = ColumnMetadata.builder()

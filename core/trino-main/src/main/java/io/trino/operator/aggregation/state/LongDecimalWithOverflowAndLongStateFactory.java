@@ -16,7 +16,8 @@ package io.trino.operator.aggregation.state;
 import io.trino.array.LongBigArray;
 import io.trino.spi.function.AccumulatorState;
 import io.trino.spi.function.AccumulatorStateFactory;
-import org.openjdk.jol.info.ClassLayout;
+
+import static io.airlift.slice.SizeOf.instanceSize;
 
 public class LongDecimalWithOverflowAndLongStateFactory
         implements AccumulatorStateFactory<LongDecimalWithOverflowAndLongState>
@@ -37,7 +38,7 @@ public class LongDecimalWithOverflowAndLongStateFactory
             extends LongDecimalWithOverflowStateFactory.GroupedLongDecimalWithOverflowState
             implements LongDecimalWithOverflowAndLongState
     {
-        private static final int INSTANCE_SIZE = ClassLayout.parseClass(GroupedLongDecimalWithOverflowAndLongState.class).instanceSize();
+        private static final int INSTANCE_SIZE = instanceSize(GroupedLongDecimalWithOverflowAndLongState.class);
         private final LongBigArray longs = new LongBigArray();
 
         @Override
@@ -68,7 +69,7 @@ public class LongDecimalWithOverflowAndLongStateFactory
         @Override
         public long getEstimatedSize()
         {
-            return INSTANCE_SIZE + isNotNull.sizeOf() + unscaledDecimals.sizeOf() + (overflows == null ? 0 : overflows.sizeOf());
+            return INSTANCE_SIZE + longs.sizeOf() + isNotNull.sizeOf() + unscaledDecimals.sizeOf() + (overflows == null ? 0 : overflows.sizeOf());
         }
     }
 
@@ -76,7 +77,7 @@ public class LongDecimalWithOverflowAndLongStateFactory
             extends LongDecimalWithOverflowStateFactory.SingleLongDecimalWithOverflowState
             implements LongDecimalWithOverflowAndLongState
     {
-        private static final int INSTANCE_SIZE = ClassLayout.parseClass(SingleLongDecimalWithOverflowAndLongState.class).instanceSize();
+        private static final int INSTANCE_SIZE = instanceSize(SingleLongDecimalWithOverflowAndLongState.class);
 
         protected long longValue;
 

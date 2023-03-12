@@ -20,7 +20,6 @@ import com.google.common.collect.Maps;
 import io.airlift.node.NodeInfo;
 import io.trino.Session;
 import io.trino.SystemSessionProperties;
-import io.trino.connector.CatalogName;
 import io.trino.connector.CatalogServiceProvider;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.spi.QueryId;
@@ -34,10 +33,12 @@ import org.testng.annotations.Test;
 
 import java.util.Optional;
 
-import static io.trino.SystemSessionProperties.HASH_PARTITION_COUNT;
 import static io.trino.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
+import static io.trino.SystemSessionProperties.MAX_HASH_PARTITION_COUNT;
 import static io.trino.SystemSessionProperties.QUERY_MAX_MEMORY;
 import static io.trino.SystemSessionProperties.QUERY_MAX_TOTAL_MEMORY;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_HANDLE;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
 import static org.testng.Assert.assertEquals;
 
 public class TestSessionPropertyDefaults
@@ -55,7 +56,7 @@ public class TestSessionPropertyDefaults
                 PropertyMetadata.stringProperty("catalog_default", "Test property", null, false));
         SessionPropertyManager sessionPropertyManager = new SessionPropertyManager(
                 ImmutableSet.of(new SystemSessionProperties()),
-                CatalogServiceProvider.singleton(new CatalogName("testCatalog"), Maps.uniqueIndex(catalogProperties, PropertyMetadata::getName)));
+                CatalogServiceProvider.singleton(TEST_CATALOG_HANDLE, Maps.uniqueIndex(catalogProperties, PropertyMetadata::getName)));
 
         SessionPropertyConfigurationManagerFactory factory = new TestingSessionPropertyConfigurationManagerFactory(
                 ImmutableMap.<String, String>builder()
@@ -63,7 +64,7 @@ public class TestSessionPropertyDefaults
                         .put(QUERY_MAX_TOTAL_MEMORY, "2GB") //Will remain default
                         .buildOrThrow(),
                 ImmutableMap.of(
-                        "testCatalog",
+                        TEST_CATALOG_NAME,
                         ImmutableMap.<String, String>builder()
                                 .put("explicit_set", "override") // Will be overridden
                                 .put("catalog_default", "catalog_default") // Will remain default
@@ -76,35 +77,33 @@ public class TestSessionPropertyDefaults
                 .setIdentity(Identity.ofUser("testUser"))
                 .setSystemProperty(QUERY_MAX_MEMORY, "1GB") // Override this default system property
                 .setSystemProperty(JOIN_DISTRIBUTION_TYPE, "partitioned")
-                .setSystemProperty(HASH_PARTITION_COUNT, "43")
-                .setCatalogSessionProperty("testCatalog", "explicit_set", "explicit_set") // Override this default catalog property
+                .setSystemProperty(MAX_HASH_PARTITION_COUNT, "43")
+                .setCatalogSessionProperty(TEST_CATALOG_NAME, "explicit_set", "explicit_set") // Override this default catalog property
                 .build();
 
         assertEquals(session.getSystemProperties(), ImmutableMap.<String, String>builder()
                 .put(QUERY_MAX_MEMORY, "1GB")
                 .put(JOIN_DISTRIBUTION_TYPE, "partitioned")
-                .put(HASH_PARTITION_COUNT, "43")
+                .put(MAX_HASH_PARTITION_COUNT, "43")
                 .buildOrThrow());
         assertEquals(
                 session.getCatalogProperties(),
                 ImmutableMap.of(
-                        "testCatalog",
-                        ImmutableMap.<String, String>builder()
-                                .put("explicit_set", "explicit_set")
-                                .buildOrThrow()));
+                        TEST_CATALOG_NAME,
+                        ImmutableMap.of("explicit_set", "explicit_set")));
 
         session = sessionPropertyDefaults.newSessionWithDefaultProperties(session, Optional.empty(), TEST_RESOURCE_GROUP_ID);
 
         assertEquals(session.getSystemProperties(), ImmutableMap.<String, String>builder()
                 .put(QUERY_MAX_MEMORY, "1GB") // User provided value overrides default value
                 .put(JOIN_DISTRIBUTION_TYPE, "partitioned") // User provided value is used
-                .put(HASH_PARTITION_COUNT, "43") // User provided value is used
+                .put(MAX_HASH_PARTITION_COUNT, "43") // User provided value is used
                 .put(QUERY_MAX_TOTAL_MEMORY, "2GB") // Default value is used
                 .buildOrThrow());
         assertEquals(
                 session.getCatalogProperties(),
                 ImmutableMap.of(
-                        "testCatalog",
+                        TEST_CATALOG_NAME,
                         ImmutableMap.<String, String>builder()
                                 .put("explicit_set", "explicit_set") // User provided value overrides default value
                                 .put("catalog_default", "catalog_default") // Default value is used

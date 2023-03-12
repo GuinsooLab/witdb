@@ -23,13 +23,11 @@ import org.testng.annotations.Test;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static io.trino.plugin.jdbc.JdbcJoinPushdownSessionProperties.JOIN_PUSHDOWN_STRATEGY;
 import static io.trino.plugin.jdbc.JdbcMetadataSessionProperties.JOIN_PUSHDOWN_ENABLED;
 import static io.trino.plugin.postgresql.PostgreSqlQueryRunner.createPostgreSqlQueryRunner;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
-import static io.trino.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.join;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.node;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.tableScan;
@@ -80,24 +78,30 @@ public class TestJoinReorderingWithJoinPushdown
                 "INNER JOIN tpch.tiny.orders o ON c.custkey = o.custkey";
 
         PlanMatchPattern joinWithoutFilter =
-                anyTree(
-                        join(INNER, List.of(equiJoinClause("o_custkey", "c_custkey")), Optional.empty(), Optional.of(PARTITIONED),
+                join(INNER, builder -> builder
+                        .equiCriteria("o_custkey", "c_custkey")
+                        .distributionType(PARTITIONED)
+                        .left(
                                 anyTree(
-                                        tableScan("orders", Map.of("o_custkey", "custkey"))),
+                                        tableScan("orders", Map.of("o_custkey", "custkey"))))
+                        .right(
                                 anyTree(
-                                        join(INNER, List.of(equiJoinClause("c_nationkey", "n_nationkey")), Optional.empty(), Optional.of(PARTITIONED),
-                                                anyTree(
-                                                        tableScan("customer", Map.of("c_custkey", "custkey", "c_nationkey", "nationkey"))),
-                                                anyTree(
-                                                        tableScan("nation", Map.of("n_nationkey", "nationkey")))))));
+                                        join(INNER, rightJoinBuilder -> rightJoinBuilder
+                                                .equiCriteria("c_nationkey", "n_nationkey")
+                                                .distributionType(PARTITIONED)
+                                                .left(
+                                                        anyTree(
+                                                                tableScan("customer", Map.of("c_custkey", "custkey", "c_nationkey", "nationkey"))))
+                                                .right(
+                                                        anyTree(
+                                                                tableScan("nation", Map.of("n_nationkey", "nationkey"))))))));
 
         PlanMatchPattern joinWithoutFilterPushedDown =
-                anyTree(
-                        node(JoinNode.class,
-                                anyTree(
-                                        tableScan("orders")),
-                                anyTree(
-                                        tableScan("_generated_query"))));
+                node(JoinNode.class,
+                        anyTree(
+                                tableScan("orders")),
+                        anyTree(
+                                tableScan("_generated_query")));
 
         // no reordering needed and pushdown is possible
         assertThat(query(session, sql)).isNotFullyPushedDown(joinWithoutFilter);
@@ -106,30 +110,44 @@ public class TestJoinReorderingWithJoinPushdown
         assertThat(query(joinPushdownEnabled, sql + " WHERE o.orderkey >= 0")).isNotFullyPushedDown(joinWithoutFilterPushedDown);
 
         PlanMatchPattern joinWithSelectiveFilterReordered =
-                anyTree(
-                        join(INNER, List.of(equiJoinClause("n_nationkey", "c_nationkey")), Optional.empty(), Optional.of(PARTITIONED),
+                join(INNER, builder -> builder
+                        .equiCriteria("n_nationkey", "c_nationkey")
+                        .distributionType(PARTITIONED)
+                        .left(
                                 anyTree(
-                                        tableScan("nation", Map.of("n_nationkey", "nationkey"))),
+                                        tableScan("nation", Map.of("n_nationkey", "nationkey"))))
+                        .right(
                                 anyTree(
-                                        join(INNER, List.of(equiJoinClause("c_custkey", "o_custkey")), Optional.empty(), Optional.of(PARTITIONED),
-                                                anyTree(
-                                                        tableScan("customer", Map.of("c_custkey", "custkey", "c_nationkey", "nationkey"))),
-                                                anyTree(
-                                                        tableScan("orders", Map.of("o_custkey", "custkey")))))));
+                                        join(INNER, rightJoinBuilder -> rightJoinBuilder
+                                                .equiCriteria("c_custkey", "o_custkey")
+                                                .distributionType(PARTITIONED)
+                                                .left(
+                                                        anyTree(
+                                                                tableScan("customer", Map.of("c_custkey", "custkey", "c_nationkey", "nationkey"))))
+                                                .right(
+                                                        anyTree(
+                                                                tableScan("orders", Map.of("o_custkey", "custkey"))))))));
 
         // join with a highly selective filter on orders causes reordering (and prevents pushdown)
         assertThat(query(session, sql + " WHERE o.orderkey = 1")).isNotFullyPushedDown(joinWithSelectiveFilterReordered);
         assertThat(query(joinPushdownEnabled, sql + " WHERE o.orderkey = 1")).isNotFullyPushedDown(joinWithSelectiveFilterReordered);
 
         PlanMatchPattern joinWithFilterReordered =
-                anyTree(
-                        join(INNER, List.of(equiJoinClause("c_nationkey", "n_nationkey")), Optional.empty(), Optional.of(PARTITIONED),
+                join(INNER, builder -> builder
+                        .equiCriteria("c_nationkey", "n_nationkey")
+                        .distributionType(PARTITIONED)
+                        .left(
                                 anyTree(
-                                        join(INNER, List.of(equiJoinClause("c_custkey", "o_custkey")), Optional.empty(), Optional.of(PARTITIONED),
-                                                anyTree(
-                                                        tableScan("customer", Map.of("c_custkey", "custkey", "c_nationkey", "nationkey"))),
-                                                anyTree(
-                                                        tableScan("orders", Map.of("o_custkey", "custkey"))))),
+                                        join(INNER, leftJoinBuilder -> leftJoinBuilder
+                                                .equiCriteria("c_custkey", "o_custkey")
+                                                .distributionType(PARTITIONED)
+                                                .left(
+                                                        anyTree(
+                                                                tableScan("customer", Map.of("c_custkey", "custkey", "c_nationkey", "nationkey"))))
+                                                .right(
+                                                        anyTree(
+                                                                tableScan("orders", Map.of("o_custkey", "custkey")))))))
+                        .right(
                                 anyTree(
                                         tableScan("nation", Map.of("n_nationkey", "nationkey")))));
 

@@ -13,13 +13,18 @@
  */
 package io.trino.plugin.hive.s3select;
 
+import com.amazonaws.AbortedException;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
 import com.amazonaws.services.s3.model.CompressionType;
+import com.amazonaws.services.s3.model.InputSerialization;
+import com.amazonaws.services.s3.model.OutputSerialization;
+import com.amazonaws.services.s3.model.ScanRange;
 import com.amazonaws.services.s3.model.SelectObjectContentRequest;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.io.Closer;
 import io.airlift.units.Duration;
 import io.trino.plugin.hive.s3.HiveS3Config;
+import io.trino.plugin.hive.s3.TrinoS3FileSystem;
 import io.trino.spi.TrinoException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -36,15 +41,19 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Properties;
 
+import static com.amazonaws.services.s3.model.ExpressionType.SQL;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_MAX_BACKOFF_TIME;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_MAX_CLIENT_RETRIES;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_MAX_RETRY_TIME;
 import static io.trino.plugin.hive.util.RetryDriver.retry;
+import static io.trino.plugin.hive.util.SerdeConstants.LINE_DELIM;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.lang.String.format;
 import static java.net.HttpURLConnection.HTTP_BAD_REQUEST;
@@ -52,7 +61,6 @@ import static java.net.HttpURLConnection.HTTP_FORBIDDEN;
 import static java.net.HttpURLConnection.HTTP_NOT_FOUND;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.apache.hadoop.hive.serde.serdeConstants.LINE_DELIM;
 
 @ThreadSafe
 public abstract class S3SelectLineRecordReader
@@ -73,10 +81,12 @@ public abstract class S3SelectLineRecordReader
     private final Duration maxRetryTime;
     private final Closer closer = Closer.create();
     private final SelectObjectContentRequest selectObjectContentRequest;
-    protected final CompressionCodecFactory compressionCodecFactory;
-    protected final String lineDelimiter;
+    private final CompressionCodecFactory compressionCodecFactory;
+    private final String lineDelimiter;
+    private final Properties schema;
+    private final CompressionType compressionType;
 
-    S3SelectLineRecordReader(
+    public S3SelectLineRecordReader(
             Configuration configuration,
             Path path,
             long start,
@@ -99,7 +109,9 @@ public abstract class S3SelectLineRecordReader
         this.isFirstLine = true;
 
         this.compressionCodecFactory = new CompressionCodecFactory(configuration);
-        this.selectObjectContentRequest = buildSelectObjectRequest(schema, ionSqlQuery, path);
+        this.compressionType = getCompressionType(path);
+        this.schema = schema;
+        this.selectObjectContentRequest = buildSelectObjectRequest(ionSqlQuery, path);
 
         HiveS3Config defaults = new HiveS3Config();
         this.maxAttempts = configuration.getInt(S3_MAX_CLIENT_RETRIES, defaults.getS3MaxClientRetries()) + 1;
@@ -110,7 +122,46 @@ public abstract class S3SelectLineRecordReader
         closer.register(selectClient);
     }
 
-    public abstract SelectObjectContentRequest buildSelectObjectRequest(Properties schema, String query, Path path);
+    protected abstract InputSerialization buildInputSerialization();
+
+    protected abstract OutputSerialization buildOutputSerialization();
+
+    protected abstract boolean shouldEnableScanRange();
+
+    protected Properties getSchema()
+    {
+        return schema;
+    }
+
+    protected CompressionType getCompressionType()
+    {
+        return compressionType;
+    }
+
+    public SelectObjectContentRequest buildSelectObjectRequest(String query, Path path)
+    {
+        SelectObjectContentRequest selectObjectRequest = new SelectObjectContentRequest();
+        URI uri = path.toUri();
+        selectObjectRequest.setBucketName(TrinoS3FileSystem.extractBucketName(uri));
+        selectObjectRequest.setKey(TrinoS3FileSystem.keyFromPath(path));
+        selectObjectRequest.setExpression(query);
+        selectObjectRequest.setExpressionType(SQL);
+
+        InputSerialization selectObjectInputSerialization = buildInputSerialization();
+        selectObjectRequest.setInputSerialization(selectObjectInputSerialization);
+
+        OutputSerialization selectObjectOutputSerialization = buildOutputSerialization();
+        selectObjectRequest.setOutputSerialization(selectObjectOutputSerialization);
+
+        if (shouldEnableScanRange()) {
+            ScanRange scanRange = new ScanRange();
+            scanRange.setStart(getStart());
+            scanRange.setEnd(getEnd());
+            selectObjectRequest.setScanRange(scanRange);
+        }
+
+        return selectObjectRequest;
+    }
 
     protected CompressionType getCompressionType(Path path)
     {
@@ -134,7 +185,7 @@ public abstract class S3SelectLineRecordReader
             return retry()
                     .maxAttempts(maxAttempts)
                     .exponentialBackoff(BACKOFF_MIN_SLEEP, maxBackoffTime, maxRetryTime, 2.0)
-                    .stopOn(InterruptedException.class, UnrecoverableS3OperationException.class)
+                    .stopOn(InterruptedException.class, UnrecoverableS3OperationException.class, AbortedException.class)
                     .run("readRecordsContentStream", () -> {
                         if (isFirstLine) {
                             recordsFromS3 = 0;
@@ -161,6 +212,10 @@ public abstract class S3SelectLineRecordReader
                             throw e;
                         }
                     });
+        }
+        catch (InterruptedException | AbortedException e) {
+            Thread.currentThread().interrupt();
+            throw new InterruptedIOException();
         }
         catch (Exception e) {
             throwIfInstanceOf(e, IOException.class);
@@ -235,5 +290,20 @@ public abstract class S3SelectLineRecordReader
             // append bucket and key to the message
             super(format("%s (Bucket: %s, Key: %s)", cause, bucket, key));
         }
+    }
+
+    protected long getStart()
+    {
+        return start;
+    }
+
+    protected long getEnd()
+    {
+        return end;
+    }
+
+    protected String getLineDelimiter()
+    {
+        return lineDelimiter;
     }
 }

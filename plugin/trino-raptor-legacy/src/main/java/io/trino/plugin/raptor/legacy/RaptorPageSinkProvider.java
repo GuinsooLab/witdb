@@ -18,8 +18,11 @@ import io.trino.plugin.raptor.legacy.storage.StorageManager;
 import io.trino.plugin.raptor.legacy.storage.StorageManagerConfig;
 import io.trino.spi.PageSorter;
 import io.trino.spi.connector.ConnectorInsertTableHandle;
+import io.trino.spi.connector.ConnectorMergeSink;
+import io.trino.spi.connector.ConnectorMergeTableHandle;
 import io.trino.spi.connector.ConnectorOutputTableHandle;
 import io.trino.spi.connector.ConnectorPageSink;
+import io.trino.spi.connector.ConnectorPageSinkId;
 import io.trino.spi.connector.ConnectorPageSinkProvider;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTransactionHandle;
@@ -47,7 +50,7 @@ public class RaptorPageSinkProvider
     }
 
     @Override
-    public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorOutputTableHandle tableHandle)
+    public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorOutputTableHandle tableHandle, ConnectorPageSinkId pageSinkId)
     {
         RaptorOutputTableHandle handle = (RaptorOutputTableHandle) tableHandle;
         return new RaptorPageSink(
@@ -65,7 +68,7 @@ public class RaptorPageSinkProvider
     }
 
     @Override
-    public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorInsertTableHandle tableHandle)
+    public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorInsertTableHandle tableHandle, ConnectorPageSinkId pageSinkId)
     {
         RaptorInsertTableHandle handle = (RaptorInsertTableHandle) tableHandle;
         return new RaptorPageSink(
@@ -80,6 +83,16 @@ public class RaptorPageSinkProvider
                 toColumnIds(handle.getBucketColumnHandles()),
                 handle.getTemporalColumnHandle(),
                 maxBufferSize);
+    }
+
+    @Override
+    public ConnectorMergeSink createMergeSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorMergeTableHandle mergeHandle, ConnectorPageSinkId pageSinkId)
+    {
+        RaptorMergeTableHandle merge = (RaptorMergeTableHandle) mergeHandle;
+        ConnectorPageSink pageSink = createPageSink(transactionHandle, session, merge.getInsertTableHandle(), pageSinkId);
+        long transactionId = merge.getInsertTableHandle().getTransactionId();
+        int columnCount = merge.getInsertTableHandle().getColumnHandles().size();
+        return new RaptorMergeSink(pageSink, storageManager, transactionId, columnCount);
     }
 
     private static List<Long> toColumnIds(List<RaptorColumnHandle> columnHandles)

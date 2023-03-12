@@ -15,15 +15,10 @@ package io.trino.sql.planner.iterative.rule;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.trino.connector.CatalogName;
 import io.trino.connector.MockConnectorColumnHandle;
 import io.trino.connector.MockConnectorFactory;
 import io.trino.connector.MockConnectorTableHandle;
-import io.trino.connector.MockConnectorTransactionHandle;
-import io.trino.metadata.TableHandle;
 import io.trino.plugin.tpch.TpchColumnHandle;
-import io.trino.plugin.tpch.TpchTableHandle;
-import io.trino.plugin.tpch.TpchTransactionHandle;
 import io.trino.spi.connector.Assignment;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
@@ -48,7 +43,6 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.trino.plugin.tpch.TpchMetadata.TINY_SCALE_FACTOR;
 import static io.trino.plugin.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.DoubleType.DOUBLE;
@@ -57,7 +51,7 @@ import static io.trino.sql.planner.assertions.PlanMatchPattern.strictProject;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.strictTableScan;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.tableScan;
 import static io.trino.sql.planner.iterative.rule.test.PlanBuilder.expression;
-import static io.trino.sql.planner.iterative.rule.test.RuleTester.defaultRuleTester;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 
 public class TestPruneTableScanColumns
@@ -73,10 +67,7 @@ public class TestPruneTableScanColumns
                     return p.project(
                             Assignments.of(p.symbol("x"), totalprice.toSymbolReference()),
                             p.tableScan(
-                                    new TableHandle(
-                                            new CatalogName("local"),
-                                            new TpchTableHandle(TINY_SCHEMA_NAME, "orders", TINY_SCALE_FACTOR),
-                                            TpchTransactionHandle.INSTANCE),
+                                    tester().getCurrentCatalogTableHandle(TINY_SCHEMA_NAME, "orders"),
                                     ImmutableList.of(orderdate, totalprice),
                                     ImmutableMap.of(
                                             orderdate, new TpchColumnHandle(orderdate.getName(), DATE),
@@ -100,10 +91,7 @@ public class TestPruneTableScanColumns
                     return p.project(
                             Assignments.of(p.symbol("x"), totalprice.toSymbolReference()),
                             p.tableScan(
-                                    new TableHandle(
-                                            new CatalogName("local"),
-                                            new TpchTableHandle(TINY_SCHEMA_NAME, "orders", TINY_SCALE_FACTOR),
-                                            TpchTransactionHandle.INSTANCE),
+                                    tester().getCurrentCatalogTableHandle(TINY_SCHEMA_NAME, "orders"),
                                     List.of(orderdate, totalprice),
                                     Map.of(
                                             orderdate, orderdateHandle,
@@ -138,28 +126,25 @@ public class TestPruneTableScanColumns
     @Test
     public void testPushColumnPruningProjection()
     {
-        try (RuleTester ruleTester = defaultRuleTester()) {
-            String mockCatalog = "mock_catalog";
-            String testSchema = "test_schema";
-            String testTable = "test_table";
-            SchemaTableName testSchemaTable = new SchemaTableName(testSchema, testTable);
-            ColumnHandle columnHandleA = new MockConnectorColumnHandle("cola", DATE);
-            ColumnHandle columnHandleB = new MockConnectorColumnHandle("colb", DOUBLE);
-            Map<String, ColumnHandle> assignments = ImmutableMap.of(
-                    "cola", columnHandleA,
-                    "colb", columnHandleB);
+        String testSchema = "test_schema";
+        String testTable = "test_table";
+        SchemaTableName testSchemaTable = new SchemaTableName(testSchema, testTable);
+        ColumnHandle columnHandleA = new MockConnectorColumnHandle("cola", DATE);
+        ColumnHandle columnHandleB = new MockConnectorColumnHandle("colb", DOUBLE);
+        Map<String, ColumnHandle> assignments = ImmutableMap.of(
+                "cola", columnHandleA,
+                "colb", columnHandleB);
 
-            // Create catalog with applyProjection
-            MockConnectorFactory factory = MockConnectorFactory.builder()
-                    .withListSchemaNames(connectorSession -> ImmutableList.of(testSchema))
-                    .withListTables((connectorSession, schema) -> testSchema.equals(schema) ? ImmutableList.of(testSchemaTable) : ImmutableList.of())
-                    .withGetColumns(schemaTableName -> assignments.entrySet().stream()
-                            .map(entry -> new ColumnMetadata(entry.getKey(), ((MockConnectorColumnHandle) entry.getValue()).getType()))
-                            .collect(toImmutableList()))
-                    .withApplyProjection(this::mockApplyProjection)
-                    .build();
-            ruleTester.getQueryRunner().createCatalog(mockCatalog, factory, ImmutableMap.of());
-
+        // Create catalog with applyProjection
+        MockConnectorFactory factory = MockConnectorFactory.builder()
+                .withListSchemaNames(connectorSession -> ImmutableList.of(testSchema))
+                .withListTables((connectorSession, schema) -> testSchema.equals(schema) ? ImmutableList.of(testTable) : ImmutableList.of())
+                .withGetColumns(schemaTableName -> assignments.entrySet().stream()
+                        .map(entry -> new ColumnMetadata(entry.getKey(), ((MockConnectorColumnHandle) entry.getValue()).getType()))
+                        .collect(toImmutableList()))
+                .withApplyProjection(this::mockApplyProjection)
+                .build();
+        try (RuleTester ruleTester = RuleTester.builder().withDefaultCatalogConnectorFactory(factory).build()) {
             ruleTester.assertThat(new PruneTableScanColumns(ruleTester.getMetadata()))
                     .on(p -> {
                         Symbol symbolA = p.symbol("cola", DATE);
@@ -167,16 +152,13 @@ public class TestPruneTableScanColumns
                         return p.project(
                                 Assignments.of(p.symbol("x"), symbolB.toSymbolReference()),
                                 p.tableScan(
-                                        new TableHandle(
-                                                new CatalogName(mockCatalog),
-                                                new MockConnectorTableHandle(testSchemaTable),
-                                                MockConnectorTransactionHandle.INSTANCE),
+                                        ruleTester.getCurrentCatalogTableHandle(testSchema, testTable),
                                         ImmutableList.of(symbolA, symbolB),
                                         ImmutableMap.of(
                                                 symbolA, columnHandleA,
                                                 symbolB, columnHandleB)));
                     })
-                    .withSession(testSessionBuilder().setCatalog(mockCatalog).setSchema(testSchema).build())
+                    .withSession(testSessionBuilder().setCatalog(TEST_CATALOG_NAME).setSchema(testSchema).build())
                     .matches(
                             strictProject(
                                     ImmutableMap.of("expr", PlanMatchPattern.expression("COLB")),

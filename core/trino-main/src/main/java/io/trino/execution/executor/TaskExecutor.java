@@ -21,6 +21,7 @@ import io.airlift.concurrent.SetThreadName;
 import io.airlift.concurrent.ThreadPoolExecutorMBean;
 import io.airlift.log.Logger;
 import io.airlift.stats.CounterStat;
+import io.airlift.stats.DistributionStat;
 import io.airlift.stats.TimeDistribution;
 import io.airlift.stats.TimeStat;
 import io.airlift.units.Duration;
@@ -58,10 +59,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.function.DoubleSupplier;
+import java.util.function.Predicate;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Sets.newConcurrentHashSet;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.concurrent.Threads.threadsNamed;
@@ -79,10 +82,6 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 public class TaskExecutor
 {
     private static final Logger log = Logger.get(TaskExecutor.class);
-
-    // print out split call stack if it has been running for a certain amount of time
-    private static final Duration LONG_SPLIT_WARNING_THRESHOLD = new Duration(600, TimeUnit.SECONDS);
-
     private static final AtomicLong NEXT_RUNNER_ID = new AtomicLong();
 
     private final ExecutorService executor;
@@ -96,6 +95,7 @@ public class TaskExecutor
 
     private final Ticker ticker;
 
+    private final Duration stuckSplitsWarningThreshold;
     private final ScheduledExecutorService splitMonitorExecutor = newSingleThreadScheduledExecutor(daemonThreadsNamed("TaskExecutor"));
     private final SortedSet<RunningSplitInfo> runningSplitInfos = new ConcurrentSkipListSet<>();
 
@@ -154,15 +154,23 @@ public class TaskExecutor
     private final TimeStat blockedQuantaWallTime = new TimeStat(MICROSECONDS);
     private final TimeStat unblockedQuantaWallTime = new TimeStat(MICROSECONDS);
 
+    private final DistributionStat leafSplitsSize = new DistributionStat();
+    @GuardedBy("this")
+    private long lastLeafSplitsSizeRecordTime;
+    @GuardedBy("this")
+    private long lastLeafSplitsSize;
+
     private volatile boolean closed;
 
     @Inject
     public TaskExecutor(TaskManagerConfig config, VersionEmbedder versionEmbedder, MultilevelSplitQueue splitQueue)
     {
-        this(requireNonNull(config, "config is null").getMaxWorkerThreads(),
+        this(
+                config.getMaxWorkerThreads(),
                 config.getMinDrivers(),
                 config.getMinDriversPerTask(),
                 config.getMaxDriversPerTask(),
+                config.getInterruptStuckSplitTasksWarningThreshold(),
                 versionEmbedder,
                 splitQueue,
                 Ticker.systemTicker());
@@ -171,13 +179,13 @@ public class TaskExecutor
     @VisibleForTesting
     public TaskExecutor(int runnerThreads, int minDrivers, int guaranteedNumberOfDriversPerTask, int maximumNumberOfDriversPerTask, Ticker ticker)
     {
-        this(runnerThreads, minDrivers, guaranteedNumberOfDriversPerTask, maximumNumberOfDriversPerTask, testingVersionEmbedder(), new MultilevelSplitQueue(2), ticker);
+        this(runnerThreads, minDrivers, guaranteedNumberOfDriversPerTask, maximumNumberOfDriversPerTask, new Duration(10, TimeUnit.MINUTES), testingVersionEmbedder(), new MultilevelSplitQueue(2), ticker);
     }
 
     @VisibleForTesting
     public TaskExecutor(int runnerThreads, int minDrivers, int guaranteedNumberOfDriversPerTask, int maximumNumberOfDriversPerTask, MultilevelSplitQueue splitQueue, Ticker ticker)
     {
-        this(runnerThreads, minDrivers, guaranteedNumberOfDriversPerTask, maximumNumberOfDriversPerTask, testingVersionEmbedder(), splitQueue, ticker);
+        this(runnerThreads, minDrivers, guaranteedNumberOfDriversPerTask, maximumNumberOfDriversPerTask, new Duration(10, TimeUnit.MINUTES), testingVersionEmbedder(), splitQueue, ticker);
     }
 
     @VisibleForTesting
@@ -186,6 +194,7 @@ public class TaskExecutor
             int minDrivers,
             int guaranteedNumberOfDriversPerTask,
             int maximumNumberOfDriversPerTask,
+            Duration stuckSplitsWarningThreshold,
             VersionEmbedder versionEmbedder,
             MultilevelSplitQueue splitQueue,
             Ticker ticker)
@@ -202,12 +211,14 @@ public class TaskExecutor
         this.versionEmbedder = requireNonNull(versionEmbedder, "versionEmbedder is null");
 
         this.ticker = requireNonNull(ticker, "ticker is null");
+        this.stuckSplitsWarningThreshold = requireNonNull(stuckSplitsWarningThreshold, "stuckSplitsWarningThreshold is null");
 
         this.minimumNumberOfDrivers = minDrivers;
         this.guaranteedNumberOfDriversPerTask = guaranteedNumberOfDriversPerTask;
         this.maximumNumberOfDriversPerTask = maximumNumberOfDriversPerTask;
         this.waitingSplits = requireNonNull(splitQueue, "splitQueue is null");
         this.tasks = new LinkedList<>();
+        this.lastLeafSplitsSizeRecordTime = ticker.read();
     }
 
     @PostConstruct
@@ -276,7 +287,10 @@ public class TaskExecutor
         }
 
         // replace blocked splits that were terminated
-        addNewEntrants();
+        synchronized (this) {
+            addNewEntrants();
+            recordLeafSplitsSize();
+        }
     }
 
     private void doRemoveTask(TaskHandle taskHandle)
@@ -291,6 +305,7 @@ public class TaskExecutor
             intermediateSplits.removeAll(splits);
             blockedSplits.keySet().removeAll(splits);
             waitingSplits.removeAll(splits);
+            recordLeafSplitsSize();
         }
 
         // call destroy outside of synchronized block as it is expensive and doesn't need a lock on the task executor
@@ -320,27 +335,32 @@ public class TaskExecutor
                         blockedQuantaWallTime,
                         unblockedQuantaWallTime);
 
-                if (taskHandle.isDestroyed()) {
-                    // If the handle is destroyed, we destroy the task splits to complete the future
-                    splitsToDestroy.add(prioritizedSplitRunner);
-                }
-                else if (intermediate) {
-                    // Note: we do not record queued time for intermediate splits
-                    startIntermediateSplit(prioritizedSplitRunner);
+                if (intermediate) {
                     // add the runner to the handle so it can be destroyed if the task is canceled
-                    taskHandle.recordIntermediateSplit(prioritizedSplitRunner);
+                    if (taskHandle.recordIntermediateSplit(prioritizedSplitRunner)) {
+                        // Note: we do not record queued time for intermediate splits
+                        startIntermediateSplit(prioritizedSplitRunner);
+                    }
+                    else {
+                        splitsToDestroy.add(prioritizedSplitRunner);
+                    }
                 }
                 else {
                     // add this to the work queue for the task
-                    taskHandle.enqueueSplit(prioritizedSplitRunner);
-                    // if task is under the limit for guaranteed splits, start one
-                    scheduleTaskIfNecessary(taskHandle);
-                    // if globally we have more resources, start more
-                    addNewEntrants();
+                    if (taskHandle.enqueueSplit(prioritizedSplitRunner)) {
+                        // if task is under the limit for guaranteed splits, start one
+                        scheduleTaskIfNecessary(taskHandle);
+                        // if globally we have more resources, start more
+                        addNewEntrants();
+                    }
+                    else {
+                        splitsToDestroy.add(prioritizedSplitRunner);
+                    }
                 }
 
                 finishedFutures.add(prioritizedSplitRunner.getFinishedFuture());
             }
+            recordLeafSplitsSize();
         }
         for (PrioritizedSplitRunner split : splitsToDestroy) {
             split.destroy();
@@ -376,6 +396,7 @@ public class TaskExecutor
             scheduleTaskIfNecessary(taskHandle);
 
             addNewEntrants();
+            recordLeafSplitsSize();
         }
         // call destroy outside of synchronized block as it is expensive and doesn't need a lock on the task executor
         split.destroy();
@@ -398,6 +419,7 @@ public class TaskExecutor
             startSplit(split);
             splitQueuedTime.add(Duration.nanosSince(split.getCreatedNanos()));
         }
+        recordLeafSplitsSize();
     }
 
     private synchronized void addNewEntrants()
@@ -457,6 +479,19 @@ public class TaskExecutor
         return null;
     }
 
+    private synchronized void recordLeafSplitsSize()
+    {
+        long now = ticker.read();
+        long timeDifference = now - this.lastLeafSplitsSizeRecordTime;
+        if (timeDifference > 0) {
+            this.leafSplitsSize.add(lastLeafSplitsSize, timeDifference);
+            this.lastLeafSplitsSizeRecordTime = now;
+        }
+        // always record new lastLeafSplitsSize as it might have changed
+        // even if timeDifference is 0
+        this.lastLeafSplitsSize = allSplits.size() - intermediateSplits.size();
+    }
+
     private class TaskRunner
             implements Runnable
     {
@@ -479,7 +514,7 @@ public class TaskExecutor
 
                     String threadId = split.getTaskHandle().getTaskId() + "-" + split.getSplitId();
                     try (SetThreadName splitName = new SetThreadName(threadId)) {
-                        RunningSplitInfo splitInfo = new RunningSplitInfo(ticker.read(), threadId, Thread.currentThread());
+                        RunningSplitInfo splitInfo = new RunningSplitInfo(ticker.read(), threadId, Thread.currentThread(), split);
                         runningSplitInfos.add(splitInfo);
                         runningSplits.add(split);
 
@@ -493,7 +528,9 @@ public class TaskExecutor
                         }
 
                         if (split.isFinished()) {
-                            log.debug("%s is finished", split.getInfo());
+                            if (log.isDebugEnabled()) {
+                                log.debug("%s is finished", split.getInfo());
+                            }
                             splitFinished(split);
                         }
                         else {
@@ -514,15 +551,23 @@ public class TaskExecutor
                     catch (Throwable t) {
                         // ignore random errors due to driver thread interruption
                         if (!split.isDestroyed()) {
-                            if (t instanceof TrinoException) {
-                                TrinoException e = (TrinoException) t;
-                                log.error(t, "Error processing %s: %s: %s", split.getInfo(), e.getErrorCode().getName(), e.getMessage());
+                            if (t instanceof TrinoException trinoException) {
+                                log.error(t, "Error processing %s: %s: %s", split.getInfo(), trinoException.getErrorCode().getName(), trinoException.getMessage());
                             }
                             else {
                                 log.error(t, "Error processing %s", split.getInfo());
                             }
                         }
                         splitFinished(split);
+                    }
+                    finally {
+                        // Clear the interrupted flag on the current thread, driver cancellation may have triggered an interrupt
+                        if (Thread.interrupted()) {
+                            if (closed) {
+                                // reset interrupted flag if closed before interrupt
+                                Thread.currentThread().interrupt();
+                            }
+                        }
                     }
                 }
             }
@@ -573,6 +618,13 @@ public class TaskExecutor
     public int getWaitingSplits()
     {
         return waitingSplits.size();
+    }
+
+    @Managed
+    @Nested
+    public DistributionStat getLeafSplitsSize()
+    {
+        return leafSplitsSize;
     }
 
     @Managed
@@ -808,7 +860,7 @@ public class TaskExecutor
         String message = "%s splits have been continuously active for more than %s seconds\n";
         for (RunningSplitInfo splitInfo : runningSplitInfos) {
             Duration duration = Duration.succinctNanos(ticker.read() - splitInfo.getStartTime());
-            if (duration.compareTo(LONG_SPLIT_WARNING_THRESHOLD) >= 0) {
+            if (duration.compareTo(stuckSplitsWarningThreshold) >= 0) {
                 maxActiveSplitCount++;
                 stackTrace.append("\n");
                 stackTrace.append(format("\"%s\" tid=%s", splitInfo.getThreadId(), splitInfo.getThread().getId())).append("\n");
@@ -818,7 +870,7 @@ public class TaskExecutor
             }
         }
 
-        return format(message, maxActiveSplitCount, LONG_SPLIT_WARNING_THRESHOLD).concat(stackTrace.toString());
+        return format(message, maxActiveSplitCount, stuckSplitsWarningThreshold).concat(stackTrace.toString());
     }
 
     @Managed
@@ -827,26 +879,44 @@ public class TaskExecutor
         int count = 0;
         for (RunningSplitInfo splitInfo : runningSplitInfos) {
             Duration duration = Duration.succinctNanos(ticker.read() - splitInfo.getStartTime());
-            if (duration.compareTo(LONG_SPLIT_WARNING_THRESHOLD) > 0) {
+            if (duration.compareTo(stuckSplitsWarningThreshold) > 0) {
                 count++;
             }
         }
         return count;
     }
 
-    private static class RunningSplitInfo
+    public Set<TaskId> getStuckSplitTaskIds(Duration processingDurationThreshold, Predicate<RunningSplitInfo> filter)
+    {
+        return runningSplitInfos.stream()
+                .filter((RunningSplitInfo splitInfo) -> {
+                    Duration splitProcessingDuration = Duration.succinctNanos(ticker.read() - splitInfo.getStartTime());
+                    return splitProcessingDuration.compareTo(processingDurationThreshold) > 0;
+                })
+                .filter(filter).map(RunningSplitInfo::getTaskId).collect(toImmutableSet());
+    }
+
+    /**
+     * A class representing a split that is running on the TaskRunner.
+     * It has a Thread object that gets assigned while assigning the split
+     * to the taskRunner. However, when the TaskRunner moves to a different split,
+     * the thread stored here will not remain assigned to this split anymore.
+     */
+    public static class RunningSplitInfo
             implements Comparable<RunningSplitInfo>
     {
         private final long startTime;
         private final String threadId;
         private final Thread thread;
         private boolean printed;
+        private final PrioritizedSplitRunner split;
 
-        public RunningSplitInfo(long startTime, String threadId, Thread thread)
+        public RunningSplitInfo(long startTime, String threadId, Thread thread, PrioritizedSplitRunner split)
         {
             this.startTime = startTime;
-            this.threadId = threadId;
-            this.thread = thread;
+            this.threadId = requireNonNull(threadId, "threadId is null");
+            this.thread = requireNonNull(thread, "thread is null");
+            this.split = requireNonNull(split, "split is null");
             this.printed = false;
         }
 
@@ -863,6 +933,22 @@ public class TaskExecutor
         public Thread getThread()
         {
             return thread;
+        }
+
+        public TaskId getTaskId()
+        {
+            return split.getTaskHandle().getTaskId();
+        }
+
+        /**
+         * {@link PrioritizedSplitRunner#getInfo()} provides runtime statistics for the split (such as total cpu utilization so far).
+         * A value returned from this method changes over time and cannot be cached as a field of {@link RunningSplitInfo}.
+         *
+         * @return Formatted string containing runtime statistics for the split.
+         */
+        public String getSplitInfo()
+        {
+            return split.getInfo();
         }
 
         public boolean isPrinted()

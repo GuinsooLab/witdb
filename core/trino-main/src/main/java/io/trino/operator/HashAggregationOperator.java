@@ -281,7 +281,6 @@ public class HashAggregationOperator
     private final BlockTypeOperators blockTypeOperators;
 
     private final List<Type> types;
-    private final HashCollisionsCounter hashCollisionsCounter;
 
     private HashAggregationBuilder aggregationBuilder;
     private final LocalMemoryContext memoryContext;
@@ -339,8 +338,6 @@ public class HashAggregationOperator
         this.spillerFactory = requireNonNull(spillerFactory, "spillerFactory is null");
         this.joinCompiler = requireNonNull(joinCompiler, "joinCompiler is null");
         this.blockTypeOperators = requireNonNull(blockTypeOperators, "blockTypeOperators is null");
-        this.hashCollisionsCounter = new HashCollisionsCounter(operatorContext);
-        operatorContext.setInfoSupplier(hashCollisionsCounter);
 
         this.memoryContext = operatorContext.localUserMemoryContext();
     }
@@ -369,12 +366,10 @@ public class HashAggregationOperator
         if (finishing || outputPages != null) {
             return false;
         }
-        else if (aggregationBuilder != null && aggregationBuilder.isFull()) {
+        if (aggregationBuilder != null && aggregationBuilder.isFull()) {
             return false;
         }
-        else {
-            return unfinishedWork == null;
-        }
+        return unfinishedWork == null;
     }
 
     @Override
@@ -536,7 +531,6 @@ public class HashAggregationOperator
     {
         outputPages = null;
         if (aggregationBuilder != null) {
-            aggregationBuilder.recordHashCollisions(hashCollisionsCounter);
             aggregationBuilder.close();
             // aggregationBuilder.close() will release all memory reserved in memory accounting.
             // The reference must be set to null afterwards to avoid unaccounted memory.

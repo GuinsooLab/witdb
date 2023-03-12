@@ -25,7 +25,6 @@ import io.trino.testing.TestingConnectorBehavior;
 import io.trino.testing.sql.SqlExecutor;
 import io.trino.testing.sql.TestTable;
 import org.testng.SkipException;
-import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
 import java.sql.Connection;
@@ -38,9 +37,11 @@ import java.util.OptionalInt;
 import java.util.stream.Stream;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.trino.plugin.jdbc.JdbcMetadataSessionProperties.DOMAIN_COMPACTION_THRESHOLD;
 import static io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties.UNSUPPORTED_TYPE_HANDLING;
 import static io.trino.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR;
 import static io.trino.plugin.phoenix5.PhoenixQueryRunner.createPhoenixQueryRunner;
+import static io.trino.spi.connector.ConnectorMetadata.MODIFYING_ROWS_MESSAGE;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.exchange;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.limit;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.output;
@@ -56,7 +57,7 @@ import static io.trino.sql.tree.SortItem.NullOrdering.FIRST;
 import static io.trino.sql.tree.SortItem.NullOrdering.LAST;
 import static io.trino.sql.tree.SortItem.Ordering.ASCENDING;
 import static io.trino.sql.tree.SortItem.Ordering.DESCENDING;
-import static io.trino.testing.sql.TestTable.randomTableSuffix;
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static java.lang.String.format;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -72,16 +73,11 @@ public class TestPhoenixConnectorTest
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        testingPhoenixServer = TestingPhoenixServer.getInstance();
+        testingPhoenixServer = closeAfterClass(TestingPhoenixServer.getInstance()).get();
         return createPhoenixQueryRunner(testingPhoenixServer, ImmutableMap.of(), REQUIRED_TPCH_TABLES);
     }
 
-    @AfterClass(alwaysRun = true)
-    public void destroy()
-    {
-        TestingPhoenixServer.shutDown();
-    }
-
+    @SuppressWarnings("DuplicateBranchesInSwitch")
     @Override
     protected boolean hasBehavior(TestingConnectorBehavior connectorBehavior)
     {
@@ -91,21 +87,26 @@ public class TestPhoenixConnectorTest
             case SUPPORTS_AGGREGATION_PUSHDOWN:
                 return false;
 
-            case SUPPORTS_CREATE_TABLE_WITH_TABLE_COMMENT:
-            case SUPPORTS_CREATE_TABLE_WITH_COLUMN_COMMENT:
-            case SUPPORTS_COMMENT_ON_TABLE:
-            case SUPPORTS_COMMENT_ON_COLUMN:
-            case SUPPORTS_ADD_COLUMN_WITH_COMMENT:
-                return false;
-
-            case SUPPORTS_RENAME_TABLE:
             case SUPPORTS_RENAME_SCHEMA:
                 return false;
 
-            case SUPPORTS_TRUNCATE:
+            case SUPPORTS_CREATE_TABLE_WITH_TABLE_COMMENT:
+            case SUPPORTS_CREATE_TABLE_WITH_COLUMN_COMMENT:
+            case SUPPORTS_RENAME_TABLE:
+                return false;
+
+            case SUPPORTS_ADD_COLUMN_WITH_COMMENT:
+            case SUPPORTS_SET_COLUMN_TYPE:
+                return false;
+
+            case SUPPORTS_COMMENT_ON_TABLE:
+            case SUPPORTS_COMMENT_ON_COLUMN:
                 return false;
 
             case SUPPORTS_NOT_NULL_CONSTRAINT:
+                return false;
+
+            case SUPPORTS_TRUNCATE:
                 return false;
 
             case SUPPORTS_ROW_TYPE:
@@ -139,43 +140,43 @@ public class TestPhoenixConnectorTest
     }
 
     @Override
-    public void testInsert()
+    public void testAlterTableRenameColumnToLongName()
     {
-        String query = "SELECT orderdate, orderkey, totalprice FROM orders";
+        assertThatThrownBy(super::testAlterTableRenameColumnToLongName)
+                // TODO (https://github.com/trinodb/trino/issues/7205) support column rename in Phoenix
+                .hasMessageContaining("Syntax error. Encountered \"RENAME\"");
+        throw new SkipException("Rename column is not yet supported by Phoenix connector");
+    }
 
-        assertUpdate("CREATE TABLE test_insert WITH (ROWKEYS='orderkey') AS " + query + " WITH NO DATA", 0);
-        assertQuery("SELECT count(*) FROM test_insert", "SELECT 0");
+    @Override
+    public void testRenameColumnName(String columnName)
+    {
+        // The column name is rejected when creating a table
+        if (columnName.equals("a\"quote")) {
+            super.testRenameColumnName(columnName);
+            return;
+        }
+        assertThatThrownBy(() -> super.testRenameColumnName(columnName))
+                // TODO (https://github.com/trinodb/trino/issues/7205) support column rename in Phoenix
+                .hasMessageContaining("Syntax error. Encountered \"RENAME\"");
+        throw new SkipException("Rename column is not yet supported by Phoenix connector");
+    }
 
-        assertUpdate("INSERT INTO test_insert " + query, "SELECT count(*) FROM orders");
-
-        assertQuery("SELECT * FROM test_insert", query);
-
-        assertUpdate("INSERT INTO test_insert (orderkey) VALUES (-1)", 1);
-        assertUpdate("INSERT INTO test_insert (orderkey) VALUES (-1)", 1); // Phoenix Upsert
-        assertUpdate("INSERT INTO test_insert (orderkey) VALUES (-2)", 1);
-        assertUpdate("INSERT INTO test_insert (orderkey, orderdate) VALUES (-3, DATE '2001-01-01')", 1);
-        assertUpdate("INSERT INTO test_insert (orderkey, orderdate) VALUES (-4, DATE '2001-01-02')", 1);
-        assertUpdate("INSERT INTO test_insert (orderdate, orderkey) VALUES (DATE '2001-01-03', -5)", 1);
-        assertUpdate("INSERT INTO test_insert (orderkey, totalprice) VALUES (-6, 1234)", 1);
-
-        assertQuery("SELECT * FROM test_insert", query
-                + " UNION ALL SELECT null, -1, null"
-                + " UNION ALL SELECT null, -2, null"
-                + " UNION ALL SELECT DATE '2001-01-01', -3, null"
-                + " UNION ALL SELECT DATE '2001-01-02', -4, null"
-                + " UNION ALL SELECT DATE '2001-01-03', -5, null"
-                + " UNION ALL SELECT null, -6, 1234");
-
-        // UNION query produces columns in the opposite order
-        // of how they are declared in the table schema
-        assertUpdate(
-                "INSERT INTO test_insert (orderkey, orderdate, totalprice) " +
-                        "SELECT orderkey, orderdate, totalprice FROM orders " +
-                        "UNION ALL " +
-                        "SELECT orderkey, orderdate, totalprice FROM orders",
-                "SELECT 2 * count(*) FROM orders");
-
-        assertUpdate("DROP TABLE test_insert");
+    @Override
+    public void testAddAndDropColumnName(String columnName)
+    {
+        // TODO: Investigate why these two case fail
+        if (columnName.equals("an'apostrophe")) {
+            assertThatThrownBy(() -> super.testAddAndDropColumnName(columnName))
+                    .hasMessageContaining("Syntax error. Mismatched input");
+            throw new SkipException("TODO");
+        }
+        if (columnName.equals("a\\backslash`")) {
+            assertThatThrownBy(() -> super.testAddAndDropColumnName(columnName))
+                    .hasMessageContaining("Undefined column");
+            throw new SkipException("TODO");
+        }
+        super.testAddAndDropColumnName(columnName);
     }
 
     @Override
@@ -315,7 +316,7 @@ public class TestPhoenixConnectorTest
         // Skipping the ą test case because it is not supported
         List<String> rows = Streams.mapWithIndex(Stream.of("a", "b", "A", "B", " a ", "a", "b", " b "), (value, idx) -> String.format("%d, '%2$s', '%2$s'", idx, value))
                 .collect(toImmutableList());
-        String tableName = "count_distinct_strings" + randomTableSuffix();
+        String tableName = "count_distinct_strings" + randomNameSuffix();
 
         try (TestTable testTable = new TestTable(getQueryRunner()::execute, tableName, "(id int, t_char CHAR(5), t_varchar VARCHAR(5)) WITH (ROWKEYS='id')", rows)) {
             assertQuery("SELECT count(DISTINCT t_varchar) FROM " + testTable.getName(), "VALUES 6");
@@ -328,7 +329,7 @@ public class TestPhoenixConnectorTest
     public void testDeleteWithLike()
     {
         assertThatThrownBy(super::testDeleteWithLike)
-                .hasStackTraceContaining("TrinoException: Unsupported delete");
+                .hasStackTraceContaining("TrinoException: " + MODIFYING_ROWS_MESSAGE);
     }
 
     @Test
@@ -353,7 +354,6 @@ public class TestPhoenixConnectorTest
 
     @Test
     public void testUnsupportedType()
-            throws Exception
     {
         onRemoteDatabase().execute("CREATE TABLE tpch.test_timestamp (pk bigint primary key, val1 timestamp)");
         onRemoteDatabase().execute("UPSERT INTO tpch.test_timestamp (pk, val1) VALUES (1, null)");
@@ -376,7 +376,6 @@ public class TestPhoenixConnectorTest
 
     @Test
     public void testDefaultDecimalTable()
-            throws Exception
     {
         onRemoteDatabase().execute("CREATE TABLE tpch.test_null_decimal (pk bigint primary key, val1 decimal)");
         onRemoteDatabase().execute("UPSERT INTO tpch.test_null_decimal (pk, val1) VALUES (1, 2)");
@@ -424,7 +423,6 @@ public class TestPhoenixConnectorTest
 
     @Test
     public void testSecondaryIndex()
-            throws Exception
     {
         assertUpdate("CREATE TABLE test_primary_table (pk bigint, val1 double, val2 double, val3 double) with(rowkeys = 'pk')");
         onRemoteDatabase().execute("CREATE LOCAL INDEX test_local_index ON tpch.test_primary_table (val1)");
@@ -437,7 +435,6 @@ public class TestPhoenixConnectorTest
 
     @Test
     public void testCaseInsensitiveNameMatching()
-            throws Exception
     {
         onRemoteDatabase().execute("CREATE TABLE tpch.\"TestCaseInsensitive\" (\"pK\" bigint primary key, \"Val1\" double)");
         assertUpdate("INSERT INTO testcaseinsensitive VALUES (1, 1.1)", 1);
@@ -446,7 +443,6 @@ public class TestPhoenixConnectorTest
 
     @Test
     public void testMissingColumnsOnInsert()
-            throws Exception
     {
         onRemoteDatabase().execute("CREATE TABLE tpch.test_col_insert(pk VARCHAR NOT NULL PRIMARY KEY, col1 VARCHAR, col2 VARCHAR)");
         assertUpdate("INSERT INTO test_col_insert(pk, col1) VALUES('1', 'val1')", 1);
@@ -665,12 +661,43 @@ public class TestPhoenixConnectorTest
     }
 
     @Override
+    public void testCreateSchemaWithLongName()
+    {
+        // TODO: Find the maximum table schema length in Phoenix and enable this test.
+        throw new SkipException("TODO");
+    }
+
+    @Override
     public void testCreateTableWithLongTableName()
     {
         // TODO: Find the maximum table name length in Phoenix and enable this test.
         // Table name length with 65536 chars throws "startRow's length must be less than or equal to 32767 to meet the criteria for a row key."
         // 32767 chars still causes the same error and shorter names (e.g. 10000) causes timeout.
         throw new SkipException("TODO");
+    }
+
+    @Override
+    public void testCreateTableWithLongColumnName()
+    {
+        // TODO: Find the maximum column name length in Phoenix and enable this test.
+        throw new SkipException("TODO");
+    }
+
+    @Override
+    public void testAlterTableAddLongColumnName()
+    {
+        // TODO: Find the maximum column name length in Phoenix and enable this test.
+        throw new SkipException("TODO");
+    }
+
+    @Test
+    public void testLargeDefaultDomainCompactionThreshold()
+    {
+        String catalogName = getSession().getCatalog().orElseThrow();
+        String propertyName = catalogName + "." + DOMAIN_COMPACTION_THRESHOLD;
+        assertQuery(
+                "SHOW SESSION LIKE '" + propertyName + "'",
+                "VALUES('" + propertyName + "','5000', '5000', 'integer', 'Maximum ranges to allow in a tuple domain without simplifying it')");
     }
 
     @Override

@@ -17,10 +17,11 @@ import io.trino.tempto.ProductTest;
 import org.testng.annotations.Test;
 
 import static io.trino.tempto.assertions.QueryAssert.Row.row;
+import static io.trino.tempto.assertions.QueryAssert.assertQueryFailure;
 import static io.trino.tempto.assertions.QueryAssert.assertThat;
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.tests.product.TestGroups.ICEBERG;
 import static io.trino.tests.product.TestGroups.PROFILE_SPECIFIC_TESTS;
-import static io.trino.tests.product.hive.util.TemporaryHiveTable.randomTableSuffix;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
 import static java.lang.String.format;
 
@@ -31,7 +32,7 @@ public class TestIcebergProcedureCalls
     public void testRollbackToSnapshot()
             throws InterruptedException
     {
-        String tableName = "test_rollback_to_snapshot_" + randomTableSuffix();
+        String tableName = "test_rollback_to_snapshot_" + randomNameSuffix();
 
         onTrino().executeQuery("USE iceberg.default");
         onTrino().executeQuery(format("DROP TABLE IF EXISTS %s", tableName));
@@ -47,11 +48,22 @@ public class TestIcebergProcedureCalls
         onTrino().executeQuery(format("DROP TABLE IF EXISTS %s", tableName));
     }
 
+    @Test(groups = {ICEBERG, PROFILE_SPECIFIC_TESTS})
+    public void testRollbackToSnapshotWithNullArgument()
+    {
+        onTrino().executeQuery("USE iceberg.default");
+        assertQueryFailure(() -> onTrino().executeQuery("CALL system.rollback_to_snapshot(NULL, 'customer_orders', 8954597067493422955)"))
+                .hasMessageMatching(".*schema cannot be null.*");
+        assertQueryFailure(() -> onTrino().executeQuery("CALL system.rollback_to_snapshot('testdb', NULL, 8954597067493422955)"))
+                .hasMessageMatching(".*table cannot be null.*");
+        assertQueryFailure(() -> onTrino().executeQuery("CALL system.rollback_to_snapshot('testdb', 'customer_orders', NULL)"))
+                .hasMessageMatching(".*snapshot_id cannot be null.*");
+    }
+
     private long getSecondOldestTableSnapshot(String tableName)
     {
         return (Long) onTrino().executeQuery(
-                format("SELECT snapshot_id FROM iceberg.default.\"%s$snapshots\" WHERE parent_id IS NOT NULL ORDER BY committed_at LIMIT 1", tableName))
-                .row(0)
-                .get(0);
+                format("SELECT snapshot_id FROM iceberg.default.\"%s$snapshots\" WHERE parent_id IS NOT NULL ORDER BY committed_at FETCH FIRST 1 ROW WITH TIES", tableName))
+                .getOnlyValue();
     }
 }

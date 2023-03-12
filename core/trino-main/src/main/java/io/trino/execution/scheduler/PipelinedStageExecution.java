@@ -20,6 +20,7 @@ import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import io.airlift.log.Logger;
+import io.trino.exchange.DirectExchangeInput;
 import io.trino.execution.ExecutionFailureInfo;
 import io.trino.execution.RemoteTask;
 import io.trino.execution.SqlStage;
@@ -29,20 +30,19 @@ import io.trino.execution.StateMachine.StateChangeListener;
 import io.trino.execution.TaskId;
 import io.trino.execution.TaskState;
 import io.trino.execution.TaskStatus;
+import io.trino.execution.buffer.OutputBufferStatus;
 import io.trino.execution.buffer.OutputBuffers;
-import io.trino.execution.buffer.OutputBuffers.OutputBufferId;
+import io.trino.execution.buffer.PipelinedOutputBuffers.OutputBufferId;
 import io.trino.failuredetector.FailureDetector;
 import io.trino.metadata.InternalNode;
 import io.trino.metadata.Split;
 import io.trino.spi.TrinoException;
 import io.trino.split.RemoteSplit;
-import io.trino.split.RemoteSplit.DirectExchangeInput;
 import io.trino.sql.planner.PlanFragment;
 import io.trino.sql.planner.plan.PlanFragmentId;
 import io.trino.sql.planner.plan.PlanNodeId;
 import io.trino.sql.planner.plan.RemoteSourceNode;
 import io.trino.util.Failures;
-import org.joda.time.DateTime;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -58,7 +58,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
@@ -73,7 +75,7 @@ import static io.trino.execution.scheduler.StageExecution.State.SCHEDULED;
 import static io.trino.execution.scheduler.StageExecution.State.SCHEDULING;
 import static io.trino.execution.scheduler.StageExecution.State.SCHEDULING_SPLITS;
 import static io.trino.failuredetector.FailureDetector.State.GONE;
-import static io.trino.operator.ExchangeOperator.REMOTE_CONNECTOR_ID;
+import static io.trino.operator.ExchangeOperator.REMOTE_CATALOG_HANDLE;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.StandardErrorCode.REMOTE_HOST_GONE;
 import static java.util.Objects.requireNonNull;
@@ -105,7 +107,7 @@ public class PipelinedStageExecution
 
     private final PipelinedStageStateMachine stateMachine;
     private final SqlStage stage;
-    private final Map<PlanFragmentId, OutputBufferManager> outputBufferManagers;
+    private final Map<PlanFragmentId, PipelinedOutputBufferManager> outputBufferManagers;
     private final TaskLifecycleListener taskLifecycleListener;
     private final FailureDetector failureDetector;
     private final Optional<int[]> bucketToPartition;
@@ -117,10 +119,8 @@ public class PipelinedStageExecution
     // current stage task tracking
     @GuardedBy("this")
     private final Set<TaskId> allTasks = new HashSet<>();
-    @GuardedBy("this")
-    private final Set<TaskId> finishedTasks = new HashSet<>();
-    @GuardedBy("this")
-    private final Set<TaskId> flushingTasks = new HashSet<>();
+    private final Set<TaskId> finishedTasks = ConcurrentHashMap.newKeySet();
+    private final Set<TaskId> flushingTasks = ConcurrentHashMap.newKeySet();
 
     // source task tracking
     @GuardedBy("this")
@@ -132,7 +132,7 @@ public class PipelinedStageExecution
 
     public static PipelinedStageExecution createPipelinedStageExecution(
             SqlStage stage,
-            Map<PlanFragmentId, OutputBufferManager> outputBufferManagers,
+            Map<PlanFragmentId, PipelinedOutputBufferManager> outputBufferManagers,
             TaskLifecycleListener taskLifecycleListener,
             FailureDetector failureDetector,
             Executor executor,
@@ -162,7 +162,7 @@ public class PipelinedStageExecution
     private PipelinedStageExecution(
             PipelinedStageStateMachine stateMachine,
             SqlStage stage,
-            Map<PlanFragmentId, OutputBufferManager> outputBufferManagers,
+            Map<PlanFragmentId, PipelinedOutputBufferManager> outputBufferManagers,
             TaskLifecycleListener taskLifecycleListener,
             FailureDetector failureDetector,
             Optional<int[]> bucketToPartition,
@@ -184,7 +184,7 @@ public class PipelinedStageExecution
         stateMachine.addStateChangeListener(state -> {
             if (!state.canScheduleMoreTasks()) {
                 taskLifecycleListener.noMoreTasks(stage.getFragment().getId());
-                updateSourceTasksOutputBuffers(OutputBufferManager::noMoreBuffers);
+                updateSourceTasksOutputBuffers(PipelinedOutputBufferManager::noMoreBuffers);
             }
         });
     }
@@ -218,29 +218,22 @@ public class PipelinedStageExecution
     }
 
     @Override
-    public synchronized void schedulingComplete()
+    public void schedulingComplete()
     {
         if (!stateMachine.transitionToScheduled()) {
             return;
         }
 
-        if (isFlushing()) {
+        if (isStageFlushing()) {
             stateMachine.transitionToFlushing();
         }
-        if (finishedTasks.containsAll(allTasks)) {
+        if (isStageFinished()) {
             stateMachine.transitionToFinished();
         }
 
         for (PlanNodeId partitionedSource : stage.getFragment().getPartitionedSources()) {
             schedulingComplete(partitionedSource);
         }
-    }
-
-    private synchronized boolean isFlushing()
-    {
-        // to transition to flushing, there must be at least one flushing task, and all others must be flushing or finished.
-        return !flushingTasks.isEmpty()
-                && allTasks.stream().allMatch(taskId -> finishedTasks.contains(taskId) || flushingTasks.contains(taskId));
     }
 
     @Override
@@ -255,15 +248,17 @@ public class PipelinedStageExecution
     @Override
     public synchronized void cancel()
     {
-        stateMachine.transitionToCanceled();
-        getAllTasks().forEach(RemoteTask::cancel);
+        // Only send tasks a cancel command if the stage is successfully cancelled and not already failed
+        if (stateMachine.transitionToCanceled()) {
+            tasks.values().forEach(RemoteTask::cancel);
+        }
     }
 
     @Override
     public synchronized void abort()
     {
         stateMachine.transitionToAborted();
-        getAllTasks().forEach(RemoteTask::abort);
+        tasks.values().forEach(RemoteTask::abort);
     }
 
     public synchronized void fail(Throwable failureCause)
@@ -278,14 +273,6 @@ public class PipelinedStageExecution
         RemoteTask task = requireNonNull(tasks.get(taskId.getPartitionId()), () -> "task not found: " + taskId);
         task.fail(failureCause);
         fail(failureCause);
-    }
-
-    @Override
-    public synchronized void failTaskRemotely(TaskId taskId, Throwable failureCause)
-    {
-        RemoteTask task = requireNonNull(tasks.get(taskId.getPartitionId()), () -> "task not found: " + taskId);
-        task.failRemotely(failureCause);
-        // not failing stage just yet; it will happen as a result of task failure
     }
 
     @Override
@@ -347,13 +334,12 @@ public class PipelinedStageExecution
         return Optional.of(task);
     }
 
-    private synchronized void updateTaskStatus(TaskStatus taskStatus)
+    private void updateTaskStatus(TaskStatus taskStatus)
     {
-        State stageState = stateMachine.getState();
-        if (stageState.isDone()) {
+        if (stateMachine.getState().isDone()) {
             return;
         }
-
+        boolean newFlushingOrFinishedTaskObserved = false;
         TaskState taskState = taskStatus.getState();
 
         switch (taskState) {
@@ -362,38 +348,86 @@ public class PipelinedStageExecution
                         .findFirst()
                         .map(this::rewriteTransportFailure)
                         .map(ExecutionFailureInfo::toException)
-                        .orElse(new TrinoException(GENERIC_INTERNAL_ERROR, "A task failed for an unknown reason"));
+                        .orElseGet(() -> new TrinoException(GENERIC_INTERNAL_ERROR, "A task failed for an unknown reason"));
                 fail(failure);
                 break;
             case CANCELED:
                 // A task should only be in the canceled state if the STAGE is cancelled
-                fail(new TrinoException(GENERIC_INTERNAL_ERROR, "A task is in the CANCELED state but stage is " + stageState));
+                fail(new TrinoException(GENERIC_INTERNAL_ERROR, "A task is in the CANCELED state but stage is " + stateMachine.getState()));
                 break;
             case ABORTED:
                 // A task should only be in the aborted state if the STAGE is done (ABORTED or FAILED)
-                fail(new TrinoException(GENERIC_INTERNAL_ERROR, "A task is in the ABORTED state but stage is " + stageState));
+                fail(new TrinoException(GENERIC_INTERNAL_ERROR, "A task is in the ABORTED state but stage is " + stateMachine.getState()));
                 break;
             case FLUSHING:
-                flushingTasks.add(taskStatus.getTaskId());
+                newFlushingOrFinishedTaskObserved = addFlushingTask(taskStatus.getTaskId());
                 break;
             case FINISHED:
-                finishedTasks.add(taskStatus.getTaskId());
-                flushingTasks.remove(taskStatus.getTaskId());
+                newFlushingOrFinishedTaskObserved = addFinishedTask(taskStatus.getTaskId());
                 break;
             default:
         }
 
+        // Only allow stage state to transition to RUNNING, FLUSHING or FINISHED state
+        // when allTasks list is complete.
+        // If scheduling of tasks completes and all tasks are already finished then
+        // stage state will also be updated by schedulingComplete method.
+        State stageState = stateMachine.getState();
         if (stageState == SCHEDULED || stageState == RUNNING || stageState == FLUSHING) {
             if (taskState == TaskState.RUNNING) {
                 stateMachine.transitionToRunning();
             }
-            if (isFlushing()) {
-                stateMachine.transitionToFlushing();
-            }
-            if (finishedTasks.containsAll(allTasks)) {
-                stateMachine.transitionToFinished();
+            // avoid extra synchronization if no new flushing or finished task was observed
+            if (newFlushingOrFinishedTaskObserved) {
+                if (isStageFlushing()) {
+                    stateMachine.transitionToFlushing();
+                }
+                if (isStageFinished()) {
+                    stateMachine.transitionToFinished();
+                }
             }
         }
+    }
+
+    private synchronized boolean isStageFlushing()
+    {
+        // to transition to flushing, there must be at least one flushing task, and all others must be flushing or finished.
+        return !flushingTasks.isEmpty() && allTasks.size() == finishedTasks.size() + flushingTasks.size();
+    }
+
+    private synchronized boolean isStageFinished()
+    {
+        boolean finished = finishedTasks.size() == allTasks.size();
+        if (finished) {
+            checkState(finishedTasks.containsAll(allTasks), "Finished tasks should contain all tasks");
+        }
+        return finished;
+    }
+
+    private boolean addFlushingTask(TaskId taskId)
+    {
+        if (!flushingTasks.contains(taskId) && !finishedTasks.contains(taskId)) {
+            synchronized (this) {
+                // We need to check whether that task is not already finished. It could happen because of out of order of
+                // task status events
+                if (!finishedTasks.contains(taskId)) {
+                    return flushingTasks.add(taskId);
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean addFinishedTask(TaskId taskId)
+    {
+        if (!finishedTasks.contains(taskId)) {
+            synchronized (this) {
+                boolean added = finishedTasks.add(taskId);
+                flushingTasks.remove(taskId);
+                return added;
+            }
+        }
+        return false;
     }
 
     private ExecutionFailureInfo rewriteTransportFailure(ExecutionFailureInfo executionFailureInfo)
@@ -441,7 +475,7 @@ public class PipelinedStageExecution
 
         sourceTasks.put(fragmentId, sourceTask);
 
-        OutputBufferManager outputBufferManager = outputBufferManagers.get(fragmentId);
+        PipelinedOutputBufferManager outputBufferManager = outputBufferManagers.get(fragmentId);
         sourceTask.setOutputBuffers(outputBufferManager.getOutputBuffers());
 
         for (RemoteTask destinationTask : getAllTasks()) {
@@ -465,10 +499,10 @@ public class PipelinedStageExecution
         }
     }
 
-    private synchronized void updateSourceTasksOutputBuffers(Consumer<OutputBufferManager> updater)
+    private synchronized void updateSourceTasksOutputBuffers(Consumer<PipelinedOutputBufferManager> updater)
     {
         for (PlanFragmentId sourceFragment : exchangeSources.keySet()) {
-            OutputBufferManager outputBufferManager = outputBufferManagers.get(sourceFragment);
+            PipelinedOutputBufferManager outputBufferManager = outputBufferManagers.get(sourceFragment);
             updater.accept(outputBufferManager);
             for (RemoteTask sourceTask : sourceTasks.get(sourceFragment)) {
                 sourceTask.setOutputBuffers(outputBufferManager.getOutputBuffers());
@@ -493,7 +527,9 @@ public class PipelinedStageExecution
     @Override
     public boolean isAnyTaskBlocked()
     {
-        return getTaskStatuses().stream().anyMatch(TaskStatus::isOutputBufferOverutilized);
+        return getTaskStatuses().stream()
+                .map(TaskStatus::getOutputBufferStatus)
+                .anyMatch(OutputBufferStatus::isOverutilized);
     }
 
     @Override
@@ -526,12 +562,18 @@ public class PipelinedStageExecution
         return stateMachine.getFailureCause();
     }
 
+    @Override
+    public String toString()
+    {
+        return stateMachine.toString();
+    }
+
     private static Split createExchangeSplit(RemoteTask sourceTask, RemoteTask destinationTask)
     {
         // Fetch the results from the buffer assigned to the task based on id
         URI exchangeLocation = sourceTask.getTaskStatus().getSelf();
         URI splitLocation = uriBuilderFrom(exchangeLocation).appendPath("results").appendPath(String.valueOf(destinationTask.getTaskId().getPartitionId())).build();
-        return new Split(REMOTE_CONNECTOR_ID, new RemoteSplit(new DirectExchangeInput(sourceTask.getTaskId(), splitLocation.toString())));
+        return new Split(REMOTE_CATALOG_HANDLE, new RemoteSplit(new DirectExchangeInput(sourceTask.getTaskId(), splitLocation.toString())));
     }
 
     private static class PipelinedStageStateMachine
@@ -540,7 +582,6 @@ public class PipelinedStageExecution
 
         private final StageId stageId;
         private final StateMachine<State> state;
-        private final AtomicReference<DateTime> schedulingComplete = new AtomicReference<>();
         private final AtomicReference<ExecutionFailureInfo> failureCause = new AtomicReference<>();
 
         private PipelinedStageStateMachine(StageId stageId, Executor executor)
@@ -568,7 +609,6 @@ public class PipelinedStageExecution
 
         public boolean transitionToScheduled()
         {
-            schedulingComplete.compareAndSet(null, DateTime.now());
             return state.setIf(SCHEDULED, currentState -> currentState == PLANNED || currentState == SCHEDULING || currentState == SCHEDULING_SPLITS);
         }
 
@@ -625,6 +665,15 @@ public class PipelinedStageExecution
         public void addStateChangeListener(StateChangeListener<State> stateChangeListener)
         {
             state.addStateChangeListener(stateChangeListener);
+        }
+
+        @Override
+        public String toString()
+        {
+            return toStringHelper(this)
+                    .add("stageId", stageId)
+                    .add("state", state)
+                    .toString();
         }
     }
 }

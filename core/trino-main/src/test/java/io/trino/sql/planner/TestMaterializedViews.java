@@ -16,6 +16,7 @@ package io.trino.sql.planner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.trino.Session;
+import io.trino.SystemSessionProperties;
 import io.trino.connector.StaticConnectorFactory;
 import io.trino.metadata.MaterializedViewDefinition;
 import io.trino.metadata.Metadata;
@@ -33,47 +34,58 @@ import io.trino.spi.security.Identity;
 import io.trino.spi.security.ViewExpression;
 import io.trino.spi.transaction.IsolationLevel;
 import io.trino.sql.planner.assertions.BasePlanTest;
+import io.trino.sql.tree.GenericLiteral;
 import io.trino.testing.LocalQueryRunner;
 import io.trino.testing.TestingAccessControlManager;
 import io.trino.testing.TestingMetadata;
 import org.testng.annotations.Test;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.TinyintType.TINYINT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
+import static io.trino.sql.planner.assertions.PlanMatchPattern.exchange;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.expression;
+import static io.trino.sql.planner.assertions.PlanMatchPattern.output;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.project;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.tableScan;
+import static io.trino.sql.planner.assertions.PlanMatchPattern.tableWriter;
+import static io.trino.sql.planner.assertions.PlanMatchPattern.values;
+import static io.trino.sql.planner.plan.ExchangeNode.Scope.LOCAL;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
+import static io.trino.testing.TestingMetadata.STALE_MV_STALENESS;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 
 public class TestMaterializedViews
         extends BasePlanTest
 {
-    private static final String CATALOG = "local";
     private static final String SCHEMA = "tiny";
 
     @Override
     protected LocalQueryRunner createLocalQueryRunner()
     {
         Session.SessionBuilder sessionBuilder = testSessionBuilder()
-                .setCatalog(CATALOG)
+                .setCatalog(TEST_CATALOG_NAME)
                 .setSchema(SCHEMA)
                 .setSystemProperty("task_concurrency", "1"); // these tests don't handle exchanges from local parallel
 
         TestingMetadata testingConnectorMetadata = new TestingMetadata();
 
         LocalQueryRunner queryRunner = LocalQueryRunner.create(sessionBuilder.build());
-        queryRunner.createCatalog(CATALOG, new StaticConnectorFactory("test", new TestMaterializedViewConnector(testingConnectorMetadata)), ImmutableMap.of());
+        queryRunner.createCatalog(TEST_CATALOG_NAME, new StaticConnectorFactory("test", new TestMaterializedViewConnector(testingConnectorMetadata)), ImmutableMap.of());
 
         Metadata metadata = queryRunner.getMetadata();
         SchemaTableName testTable = new SchemaTableName(SCHEMA, "test_table");
         queryRunner.inTransaction(session -> {
             metadata.createTable(
                     session,
-                    CATALOG,
+                    TEST_CATALOG_NAME,
                     new ConnectorTableMetadata(
                             testTable,
                             ImmutableList.of(
@@ -87,7 +99,7 @@ public class TestMaterializedViews
         queryRunner.inTransaction(session -> {
             metadata.createTable(
                     session,
-                    CATALOG,
+                    TEST_CATALOG_NAME,
                     new ConnectorTableMetadata(
                             storageTable,
                             ImmutableList.of(
@@ -101,7 +113,7 @@ public class TestMaterializedViews
         queryRunner.inTransaction(session -> {
             metadata.createTable(
                     session,
-                    CATALOG,
+                    TEST_CATALOG_NAME,
                     new ConnectorTableMetadata(
                             storageTableWithCasts,
                             ImmutableList.of(
@@ -111,15 +123,16 @@ public class TestMaterializedViews
             return null;
         });
 
-        QualifiedObjectName freshMaterializedView = new QualifiedObjectName(CATALOG, SCHEMA, "fresh_materialized_view");
+        QualifiedObjectName freshMaterializedView = new QualifiedObjectName(TEST_CATALOG_NAME, SCHEMA, "fresh_materialized_view");
         MaterializedViewDefinition materializedViewDefinition = new MaterializedViewDefinition(
                 "SELECT a, b FROM test_table",
-                Optional.of(CATALOG),
+                Optional.of(TEST_CATALOG_NAME),
                 Optional.of(SCHEMA),
-                ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId()), new ViewColumn("b", BIGINT.getTypeId())),
+                ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty()), new ViewColumn("b", BIGINT.getTypeId(), Optional.empty())),
+                Optional.of(STALE_MV_STALENESS.plusHours(1)),
                 Optional.empty(),
                 Identity.ofUser("some user"),
-                Optional.of(new CatalogSchemaTableName(CATALOG, SCHEMA, "storage_table")),
+                Optional.of(new CatalogSchemaTableName(TEST_CATALOG_NAME, SCHEMA, "storage_table")),
                 ImmutableMap.of());
         queryRunner.inTransaction(session -> {
             metadata.createMaterializedView(
@@ -132,7 +145,7 @@ public class TestMaterializedViews
         });
         testingConnectorMetadata.markMaterializedViewIsFresh(freshMaterializedView.asSchemaTableName());
 
-        QualifiedObjectName notFreshMaterializedView = new QualifiedObjectName(CATALOG, SCHEMA, "not_fresh_materialized_view");
+        QualifiedObjectName notFreshMaterializedView = new QualifiedObjectName(TEST_CATALOG_NAME, SCHEMA, "not_fresh_materialized_view");
         queryRunner.inTransaction(session -> {
             metadata.createMaterializedView(
                     session,
@@ -145,14 +158,15 @@ public class TestMaterializedViews
 
         MaterializedViewDefinition materializedViewDefinitionWithCasts = new MaterializedViewDefinition(
                 "SELECT a, b FROM test_table",
-                Optional.of(CATALOG),
+                Optional.of(TEST_CATALOG_NAME),
                 Optional.of(SCHEMA),
-                ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId()), new ViewColumn("b", BIGINT.getTypeId())),
+                ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty()), new ViewColumn("b", BIGINT.getTypeId(), Optional.empty())),
+                Optional.empty(),
                 Optional.empty(),
                 Identity.ofUser("some user"),
-                Optional.of(new CatalogSchemaTableName(CATALOG, SCHEMA, "storage_table_with_casts")),
+                Optional.of(new CatalogSchemaTableName(TEST_CATALOG_NAME, SCHEMA, "storage_table_with_casts")),
                 ImmutableMap.of());
-        QualifiedObjectName materializedViewWithCasts = new QualifiedObjectName(CATALOG, SCHEMA, "materialized_view_with_casts");
+        QualifiedObjectName materializedViewWithCasts = new QualifiedObjectName(TEST_CATALOG_NAME, SCHEMA, "materialized_view_with_casts");
         queryRunner.inTransaction(session -> {
             metadata.createMaterializedView(
                     session,
@@ -163,6 +177,16 @@ public class TestMaterializedViews
             return null;
         });
         testingConnectorMetadata.markMaterializedViewIsFresh(materializedViewWithCasts.asSchemaTableName());
+
+        queryRunner.inTransaction(session -> {
+            metadata.createMaterializedView(
+                    session,
+                    new QualifiedObjectName(TEST_CATALOG_NAME, SCHEMA, "stale_materialized_view_with_casts"),
+                    materializedViewDefinitionWithCasts,
+                    false,
+                    false);
+            return null;
+        });
 
         return queryRunner;
     }
@@ -178,7 +202,28 @@ public class TestMaterializedViews
     @Test
     public void testNotFreshMaterializedView()
     {
-        assertPlan("SELECT * FROM not_fresh_materialized_view",
+        Session defaultSession = getQueryRunner().getDefaultSession();
+        Session legacyGracePeriod = Session.builder(defaultSession)
+                .setSystemProperty(SystemSessionProperties.LEGACY_MATERIALIZED_VIEW_GRACE_PERIOD, "true")
+                .build();
+        Session futureSession = Session.builder(defaultSession)
+                .setStart(Instant.now().plus(1, ChronoUnit.DAYS))
+                .build();
+
+        assertPlan(
+                "SELECT * FROM not_fresh_materialized_view",
+                defaultSession,
+                anyTree(
+                        tableScan("storage_table")));
+
+        assertPlan(
+                "SELECT * FROM not_fresh_materialized_view",
+                legacyGracePeriod,
+                anyTree(
+                        tableScan("test_table")));
+        assertPlan(
+                "SELECT * FROM not_fresh_materialized_view",
+                futureSession,
                 anyTree(
                         tableScan("test_table")));
     }
@@ -188,7 +233,7 @@ public class TestMaterializedViews
     {
         TestingAccessControlManager accessControl = getQueryRunner().getAccessControl();
         accessControl.columnMask(
-                new QualifiedObjectName(CATALOG, SCHEMA, "materialized_view_with_casts"),
+                new QualifiedObjectName(TEST_CATALOG_NAME, SCHEMA, "materialized_view_with_casts"),
                 "a",
                 "user",
                 new ViewExpression("user", Optional.empty(), Optional.empty(), "a + 1"));
@@ -199,6 +244,22 @@ public class TestMaterializedViews
                                         "A_CAST", expression("CAST(A as BIGINT) + BIGINT '1'"),
                                         "B_CAST", expression("CAST(B as BIGINT)")),
                                 tableScan("storage_table_with_casts", ImmutableMap.of("A", "a", "B", "b")))));
+    }
+
+    @Test
+    public void testRefreshMaterializedViewWithCasts()
+    {
+        assertPlan("REFRESH MATERIALIZED VIEW stale_materialized_view_with_casts",
+                anyTree(
+                        tableWriter(List.of("A_CAST", "B_CAST"), List.of("a", "b"),
+                                exchange(LOCAL,
+                                        project(Map.of("A_CAST", expression("CAST(A AS tinyint)"), "B_CAST", expression("CAST(B AS varchar)")),
+                                                tableScan("test_table", Map.of("A", "a", "B", "b")))))));
+
+        // No-op REFRESH
+        assertPlan("REFRESH MATERIALIZED VIEW materialized_view_with_casts",
+                output(
+                        values(List.of("rows"), List.of(List.of(new GenericLiteral("BIGINT", "0"))))));
     }
 
     private static class TestMaterializedViewConnector

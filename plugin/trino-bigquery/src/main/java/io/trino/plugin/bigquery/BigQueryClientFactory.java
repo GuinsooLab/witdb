@@ -19,6 +19,7 @@ import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.cloud.bigquery.BigQuery;
 import com.google.cloud.bigquery.BigQueryOptions;
 import com.google.common.cache.CacheBuilder;
+import io.airlift.units.Duration;
 import io.trino.collect.cache.NonEvictableCache;
 import io.trino.spi.connector.ConnectorSession;
 
@@ -35,10 +36,13 @@ public class BigQueryClientFactory
 {
     private final IdentityCacheMapping identityCacheMapping;
     private final BigQueryCredentialsSupplier credentialsSupplier;
-    private final BigQueryConfig bigQueryConfig;
+    private final Optional<String> parentProjectId;
+    private final Optional<String> projectId;
+    private final boolean caseInsensitiveNameMatching;
     private final ViewMaterializationCache materializationCache;
     private final HeaderProvider headerProvider;
     private final NonEvictableCache<IdentityCacheMapping.IdentityCacheKey, BigQueryClient> clientCache;
+    private final Duration metadataCacheTtl;
 
     @Inject
     public BigQueryClientFactory(
@@ -50,9 +54,13 @@ public class BigQueryClientFactory
     {
         this.identityCacheMapping = requireNonNull(identityCacheMapping, "identityCacheMapping is null");
         this.credentialsSupplier = requireNonNull(credentialsSupplier, "credentialsSupplier is null");
-        this.bigQueryConfig = requireNonNull(bigQueryConfig, "bigQueryConfig is null");
+        requireNonNull(bigQueryConfig, "bigQueryConfig is null");
+        this.parentProjectId = bigQueryConfig.getParentProjectId();
+        this.projectId = bigQueryConfig.getProjectId();
+        this.caseInsensitiveNameMatching = bigQueryConfig.isCaseInsensitiveNameMatching();
         this.materializationCache = requireNonNull(materializationCache, "materializationCache is null");
         this.headerProvider = requireNonNull(headerProvider, "headerProvider is null");
+        this.metadataCacheTtl = bigQueryConfig.getMetadataCacheTtl();
 
         CacheBuilder<Object, Object> cacheBuilder = CacheBuilder.newBuilder()
                 .expireAfterWrite(bigQueryConfig.getServiceCacheTtl().toMillis(), MILLISECONDS);
@@ -69,13 +77,13 @@ public class BigQueryClientFactory
 
     protected BigQueryClient createBigQueryClient(ConnectorSession session)
     {
-        return new BigQueryClient(createBigQuery(session), bigQueryConfig, materializationCache);
+        return new BigQueryClient(createBigQuery(session), caseInsensitiveNameMatching, materializationCache, metadataCacheTtl, projectId);
     }
 
     protected BigQuery createBigQuery(ConnectorSession session)
     {
         Optional<Credentials> credentials = credentialsSupplier.getCredentials(session);
-        String billingProjectId = calculateBillingProjectId(bigQueryConfig.getParentProjectId(), credentials);
+        String billingProjectId = calculateBillingProjectId(parentProjectId, credentials);
         BigQueryOptions.Builder options = BigQueryOptions.newBuilder()
                 .setHeaderProvider(headerProvider)
                 .setProjectId(billingProjectId);

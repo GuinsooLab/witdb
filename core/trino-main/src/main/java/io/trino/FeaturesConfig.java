@@ -47,8 +47,10 @@ import static io.trino.sql.analyzer.RegexLibrary.JONI;
         "deprecated.legacy-map-subscript",
         "deprecated.legacy-order-by",
         "deprecated.legacy-row-field-ordinal-access",
+        "deprecated.legacy-row-to-json-cast",
         "deprecated.legacy-timestamp",
         "deprecated.legacy-unnest-array-rows",
+        "deprecated.legacy-update-delete-implementation",
         "experimental-syntax-enabled",
         "experimental.resource-groups-enabled",
         "fast-inequality-joins",
@@ -65,15 +67,16 @@ import static io.trino.sql.analyzer.RegexLibrary.JONI;
 public class FeaturesConfig
 {
     @VisibleForTesting
-    static final String SPILL_ENABLED = "spill-enabled";
     public static final String SPILLER_SPILL_PATH = "spiller-spill-path";
 
     private boolean redistributeWrites = true;
     private boolean scaleWriters = true;
     private DataSize writerMinSize = DataSize.of(32, DataSize.Unit.MEGABYTE);
     private DataIntegrityVerification exchangeDataIntegrityVerification = DataIntegrityVerification.ABORT;
+    /**
+     * default value is overwritten for fault tolerant execution in {@link #applyFaultTolerantExecutionDefaults()}}
+     */
     private boolean exchangeCompressionEnabled;
-    private boolean legacyRowToJsonCast;
     private boolean pagesIndexEagerCompactionEnabled;
     private boolean omitDateTimeTypePrecision;
     private int maxRecursionDepth = 10;
@@ -99,8 +102,11 @@ public class FeaturesConfig
     private boolean incrementalHashArrayLoadFactorEnabled = true;
     private boolean allowSetViewAuthorization;
 
+    private boolean legacyMaterializedViewGracePeriod;
     private boolean hideInaccessibleColumns;
     private boolean forceSpillingJoin;
+
+    private boolean faultTolerantExecutionExchangeEncryptionEnabled = true;
 
     public enum DataIntegrityVerification
     {
@@ -120,18 +126,6 @@ public class FeaturesConfig
     public FeaturesConfig setOmitDateTimeTypePrecision(boolean value)
     {
         this.omitDateTimeTypePrecision = value;
-        return this;
-    }
-
-    public boolean isLegacyRowToJsonCast()
-    {
-        return legacyRowToJsonCast;
-    }
-
-    @Config("deprecated.legacy-row-to-json-cast")
-    public FeaturesConfig setLegacyRowToJsonCast(boolean legacyRowToJsonCast)
-    {
-        this.legacyRowToJsonCast = legacyRowToJsonCast;
         return this;
     }
 
@@ -216,7 +210,7 @@ public class FeaturesConfig
         return spillEnabled;
     }
 
-    @Config(SPILL_ENABLED)
+    @Config("spill-enabled")
     @LegacyConfig("experimental.spill-enabled")
     public FeaturesConfig setSpillEnabled(boolean spillEnabled)
     {
@@ -242,7 +236,7 @@ public class FeaturesConfig
         return spillerSpillPaths;
     }
 
-    @Config(SPILLER_SPILL_PATH)
+    @Config("spiller-spill-path")
     @LegacyConfig("experimental.spiller-spill-path")
     public FeaturesConfig setSpillerSpillPaths(String spillPaths)
     {
@@ -452,6 +446,21 @@ public class FeaturesConfig
         return this;
     }
 
+    @Deprecated
+    public boolean isLegacyMaterializedViewGracePeriod()
+    {
+        return legacyMaterializedViewGracePeriod;
+    }
+
+    @Deprecated
+    @Config("legacy.materialized-view-grace-period")
+    @ConfigDescription("Enable legacy handling of stale materialized views")
+    public FeaturesConfig setLegacyMaterializedViewGracePeriod(boolean legacyMaterializedViewGracePeriod)
+    {
+        this.legacyMaterializedViewGracePeriod = legacyMaterializedViewGracePeriod;
+        return this;
+    }
+
     public boolean isHideInaccessibleColumns()
     {
         return hideInaccessibleColumns;
@@ -490,5 +499,22 @@ public class FeaturesConfig
     {
         this.forceSpillingJoin = forceSpillingJoin;
         return this;
+    }
+
+    public boolean isFaultTolerantExecutionExchangeEncryptionEnabled()
+    {
+        return faultTolerantExecutionExchangeEncryptionEnabled;
+    }
+
+    @Config("fault-tolerant-execution.exchange-encryption-enabled")
+    public FeaturesConfig setFaultTolerantExecutionExchangeEncryptionEnabled(boolean faultTolerantExecutionExchangeEncryptionEnabled)
+    {
+        this.faultTolerantExecutionExchangeEncryptionEnabled = faultTolerantExecutionExchangeEncryptionEnabled;
+        return this;
+    }
+
+    public void applyFaultTolerantExecutionDefaults()
+    {
+        exchangeCompressionEnabled = true;
     }
 }

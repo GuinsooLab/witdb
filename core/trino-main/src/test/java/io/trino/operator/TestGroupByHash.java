@@ -22,7 +22,6 @@ import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.DictionaryBlock;
-import io.trino.spi.block.DictionaryId;
 import io.trino.spi.block.LongArrayBlock;
 import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.block.VariableWidthBlock;
@@ -49,7 +48,6 @@ import static io.trino.block.BlockAssertions.createLongsBlock;
 import static io.trino.block.BlockAssertions.createStringSequenceBlock;
 import static io.trino.operator.GroupByHash.createGroupByHash;
 import static io.trino.operator.UpdateMemory.NOOP;
-import static io.trino.spi.block.DictionaryId.randomDictionaryId;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.VarcharType.VARCHAR;
@@ -146,8 +144,8 @@ public class TestGroupByHash
         Block block = BlockAssertions.createLongsBlock(0L);
         Block hashBlock = TypeTestUtils.getHashBlock(ImmutableList.of(BIGINT), block);
         Page page = new Page(
-                new RunLengthEncodedBlock(block, 2),
-                new RunLengthEncodedBlock(hashBlock, 2));
+                RunLengthEncodedBlock.create(block, 2),
+                RunLengthEncodedBlock.create(hashBlock, 2));
 
         groupByHash.addPage(page).process();
 
@@ -175,8 +173,8 @@ public class TestGroupByHash
         Block hashBlock = TypeTestUtils.getHashBlock(ImmutableList.of(BIGINT), block);
         int[] ids = new int[] {0, 0, 1, 1};
         Page page = new Page(
-                new DictionaryBlock(block, ids),
-                new DictionaryBlock(hashBlock, ids));
+                DictionaryBlock.create(ids.length, block, ids),
+                DictionaryBlock.create(ids.length, hashBlock, ids));
 
         groupByHash.addPage(page).process();
 
@@ -383,8 +381,8 @@ public class TestGroupByHash
                 });
         groupByHash.addPage(new Page(valuesBlock, hashBlock)).process();
 
-        // assert we call update memory every time we rehash; the rehash count = log2(length / FILL_RATIO)
-        assertEquals(rehashCount.get(), log2(length / 0.75, RoundingMode.FLOOR));
+        // assert we call update memory twice every time we rehash; the rehash count = log2(length / FILL_RATIO)
+        assertEquals(rehashCount.get(), 2 * log2(length / 0.75, RoundingMode.FLOOR));
     }
 
     @Test(dataProvider = "dataType")
@@ -405,7 +403,7 @@ public class TestGroupByHash
         Block hashBlock = getHashBlock(ImmutableList.of(type), valuesBlock);
         Page page = new Page(valuesBlock, hashBlock);
         AtomicInteger currentQuota = new AtomicInteger(0);
-        AtomicInteger allowedQuota = new AtomicInteger(3);
+        AtomicInteger allowedQuota = new AtomicInteger(6);
         UpdateMemory updateMemory = () -> {
             if (currentQuota.get() < allowedQuota.get()) {
                 currentQuota.getAndIncrement();
@@ -427,21 +425,21 @@ public class TestGroupByHash
                 assertFalse(addPageWork.process());
                 assertEquals(currentQuota.get(), allowedQuota.get());
                 yields++;
-                allowedQuota.getAndAdd(3);
+                allowedQuota.getAndAdd(6);
             }
         }
 
         // assert there is not anything missing
         assertEquals(length, groupByHash.getGroupCount());
         // assert we yield for every 3 rehashes
-        // currentQuota is essentially the count we have successfully rehashed
+        // currentQuota is essentially the count we have successfully rehashed multiplied by 2 (as updateMemory is called twice per rehash)
         // the rehash count is 20 = log(1_000_000 / 0.75)
-        assertEquals(currentQuota.get(), 20);
-        assertEquals(currentQuota.get() / 3, yields);
+        assertEquals(currentQuota.get(), 20 * 2);
+        assertEquals(currentQuota.get() / 3 / 2, yields);
 
         // test getGroupIds
         currentQuota.set(0);
-        allowedQuota.set(3);
+        allowedQuota.set(6);
         yields = 0;
         groupByHash = createGroupByHash(ImmutableList.of(type), new int[] {0}, Optional.of(1), 1, false, JOIN_COMPILER, TYPE_OPERATOR_FACTORY, updateMemory);
 
@@ -455,17 +453,17 @@ public class TestGroupByHash
                 assertFalse(getGroupIdsWork.process());
                 assertEquals(currentQuota.get(), allowedQuota.get());
                 yields++;
-                allowedQuota.getAndAdd(3);
+                allowedQuota.getAndAdd(6);
             }
         }
         // assert there is not anything missing
         assertEquals(length, groupByHash.getGroupCount());
         assertEquals(length, getGroupIdsWork.getResult().getPositionCount());
         // assert we yield for every 3 rehashes
-        // currentQuota is essentially the count we have successfully rehashed
+        // currentQuota is essentially the count we have successfully rehashed multiplied by 2 (as updateMemory is called twice per rehash)
         // the rehash count is 20 = log2(1_000_000 / 0.75)
-        assertEquals(currentQuota.get(), 20);
-        assertEquals(currentQuota.get() / 3, yields);
+        assertEquals(currentQuota.get(), 20 * 2);
+        assertEquals(currentQuota.get() / 3 / 2, yields);
     }
 
     @Test(dataProvider = "groupByHashType")
@@ -475,12 +473,11 @@ public class TestGroupByHash
         int dictionaryLength = 1_000;
         int length = 2_000_000;
         int[] ids = IntStream.range(0, dictionaryLength).toArray();
-        DictionaryId dictionaryId = randomDictionaryId();
-        Block valuesBlock = new DictionaryBlock(dictionaryLength, createLongSequenceBlock(0, length), ids, dictionaryId);
-        Block hashBlock = new DictionaryBlock(dictionaryLength, getHashBlock(ImmutableList.of(BIGINT), valuesBlock), ids, dictionaryId);
+        Block valuesBlock = DictionaryBlock.create(dictionaryLength, createLongSequenceBlock(0, length), ids);
+        Block hashBlock = DictionaryBlock.create(dictionaryLength, getHashBlock(ImmutableList.of(BIGINT), valuesBlock), ids);
         Page page = new Page(valuesBlock, hashBlock);
         AtomicInteger currentQuota = new AtomicInteger(0);
-        AtomicInteger allowedQuota = new AtomicInteger(3);
+        AtomicInteger allowedQuota = new AtomicInteger(6);
         UpdateMemory updateMemory = () -> {
             if (currentQuota.get() < allowedQuota.get()) {
                 currentQuota.getAndIncrement();
@@ -503,21 +500,21 @@ public class TestGroupByHash
                 assertFalse(addPageWork.process());
                 assertEquals(currentQuota.get(), allowedQuota.get());
                 yields++;
-                allowedQuota.getAndAdd(3);
+                allowedQuota.getAndAdd(6);
             }
         }
 
         // assert there is not anything missing
         assertEquals(dictionaryLength, groupByHash.getGroupCount());
         // assert we yield for every 3 rehashes
-        // currentQuota is essentially the count we have successfully rehashed
+        // currentQuota is essentially the count we have successfully rehashed multiplied by 2 (as updateMemory is called twice per rehash)
         // the rehash count is 10 = log(1_000 / 0.75)
-        assertEquals(currentQuota.get(), 10);
-        assertEquals(currentQuota.get() / 3, yields);
+        assertEquals(currentQuota.get(), 10 * 2);
+        assertEquals(currentQuota.get() / 3 / 2, yields);
 
         // test getGroupIds
         currentQuota.set(0);
-        allowedQuota.set(3);
+        allowedQuota.set(6);
         yields = 0;
         groupByHash = groupByHashType.createGroupByHash(1, updateMemory);
 
@@ -531,7 +528,7 @@ public class TestGroupByHash
                 assertFalse(getGroupIdsWork.process());
                 assertEquals(currentQuota.get(), allowedQuota.get());
                 yields++;
-                allowedQuota.getAndAdd(3);
+                allowedQuota.getAndAdd(6);
             }
         }
 
@@ -539,10 +536,10 @@ public class TestGroupByHash
         assertEquals(dictionaryLength, groupByHash.getGroupCount());
         assertEquals(dictionaryLength, getGroupIdsWork.getResult().getPositionCount());
         // assert we yield for every 3 rehashes
-        // currentQuota is essentially the count we have successfully rehashed
+        // currentQuota is essentially the count we have successfully rehashed multiplied by 2 (as updateMemory is called twice per rehash)
         // the rehash count is 10 = log2(1_000 / 0.75)
-        assertEquals(currentQuota.get(), 10);
-        assertEquals(currentQuota.get() / 3, yields);
+        assertEquals(currentQuota.get(), 10 * 2);
+        assertEquals(currentQuota.get() / 3 / 2, yields);
     }
 
     @Test
@@ -637,8 +634,8 @@ public class TestGroupByHash
         for (int i = 0; i < 16; i++) {
             ids[i] = 1;
         }
-        Block block1 = new DictionaryBlock(dictionary, ids);
-        Block block2 = new DictionaryBlock(dictionary, ids);
+        Block block1 = DictionaryBlock.create(ids.length, dictionary, ids);
+        Block block2 = DictionaryBlock.create(ids.length, dictionary, ids);
 
         Page page = new Page(block1, block2);
 
@@ -661,10 +658,10 @@ public class TestGroupByHash
     {
         Block bigintBlock = BlockAssertions.createLongsBlock(1, 2, 3, 4, 5, 6, 7, 8);
         Block bigintDictionaryBlock = BlockAssertions.createLongDictionaryBlock(0, 8);
-        Block bigintRleBlock = BlockAssertions.createRLEBlock(42, 8);
+        Block bigintRleBlock = BlockAssertions.createRepeatedValuesBlock(42, 8);
         Block varcharBlock = BlockAssertions.createStringsBlock("1", "2", "3", "4", "5", "6", "7", "8");
         Block varcharDictionaryBlock = BlockAssertions.createStringDictionaryBlock(1, 8);
-        Block varcharRleBlock = new RunLengthEncodedBlock(new VariableWidthBlock(1, Slices.EMPTY_SLICE, new int[] {0, 1}, Optional.empty()), 8);
+        Block varcharRleBlock = RunLengthEncodedBlock.create(new VariableWidthBlock(1, Slices.EMPTY_SLICE, new int[] {0, 1}, Optional.empty()), 8);
         Block bigintBigDictionaryBlock = BlockAssertions.createLongDictionaryBlock(1, 8, 1000);
         Block bigintSingletonDictionaryBlock = BlockAssertions.createLongDictionaryBlock(1, 500000, 1);
         Block bigintHugeDictionaryBlock = BlockAssertions.createLongDictionaryBlock(1, 500000, 66000); // Above Short.MAX_VALUE

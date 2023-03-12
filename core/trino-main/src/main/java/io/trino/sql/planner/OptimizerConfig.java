@@ -19,10 +19,12 @@ import io.airlift.configuration.LegacyConfig;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 
+import javax.annotation.Nullable;
 import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 
+import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
@@ -49,7 +51,6 @@ public class OptimizerConfig
     private boolean nonEstimatablePredicateApproximationEnabled = true;
 
     private boolean colocatedJoinsEnabled;
-    private boolean distributedIndexJoinsEnabled;
     private boolean spatialJoinsEnabled = true;
     private boolean distributedSort = true;
 
@@ -62,11 +63,15 @@ public class OptimizerConfig
     private boolean optimizeHashGeneration = true;
     private boolean pushTableWriteThroughUnion = true;
     private boolean dictionaryAggregation;
-    private boolean useMarkDistinct = true;
+    @Nullable
+    private Boolean useMarkDistinct;
+    @Nullable
+    private MarkDistinctStrategy markDistinctStrategy;
     private boolean preferPartialAggregation = true;
     private boolean pushAggregationThroughOuterJoin = true;
     private boolean enableIntermediateAggregations;
     private boolean pushPartialAggregationThoughJoin;
+    private boolean preAggregateCaseAggregationsEnabled = true;
     private boolean optimizeMixedDistinctAggregations;
     private boolean enableForcedExchangeBelowGroupId = true;
     private boolean optimizeTopNRanking = true;
@@ -80,13 +85,15 @@ public class OptimizerConfig
     private boolean useTableScanNodePartitioning = true;
     private double tableScanNodePartitioningMinBucketToTaskRatio = 0.5;
     private boolean mergeProjectWithValues = true;
-    private boolean forceSingleNodeOutput = true;
+    private boolean forceSingleNodeOutput;
     private boolean useExactPartitioning;
     // adaptive partial aggregation
     private boolean adaptivePartialAggregationEnabled = true;
     private long adaptivePartialAggregationMinRows = 100_000;
     private double adaptivePartialAggregationUniqueRowsRatioThreshold = 0.8;
     private long joinPartitionedBuildMinRowCount = 1_000_000L;
+    private DataSize minInputSizePerTask = DataSize.of(5, GIGABYTE);
+    private long minInputRowsPerTask = 10_000_000L;
 
     public enum JoinReorderingStrategy
     {
@@ -110,6 +117,13 @@ public class OptimizerConfig
         {
             return this == BROADCAST || this == AUTOMATIC;
         }
+    }
+
+    public enum MarkDistinctStrategy
+    {
+        NONE,
+        ALWAYS,
+        AUTOMATIC,
     }
 
     public double getCpuCostWeight()
@@ -320,18 +334,6 @@ public class OptimizerConfig
         return this;
     }
 
-    public boolean isDistributedIndexJoinsEnabled()
-    {
-        return distributedIndexJoinsEnabled;
-    }
-
-    @Config("distributed-index-joins-enabled")
-    public OptimizerConfig setDistributedIndexJoinsEnabled(boolean distributedIndexJoinsEnabled)
-    {
-        this.distributedIndexJoinsEnabled = distributedIndexJoinsEnabled;
-        return this;
-    }
-
     public boolean isSpatialJoinsEnabled()
     {
         return spatialJoinsEnabled;
@@ -445,6 +447,19 @@ public class OptimizerConfig
         return this;
     }
 
+    public boolean isPreAggregateCaseAggregationsEnabled()
+    {
+        return preAggregateCaseAggregationsEnabled;
+    }
+
+    @Config("optimizer.pre-aggregate-case-aggregations.enabled")
+    @ConfigDescription("Pre-aggregate rows before GROUP BY with multiple CASE aggregations on same column")
+    public OptimizerConfig setPreAggregateCaseAggregationsEnabled(boolean preAggregateCaseAggregationsEnabled)
+    {
+        this.preAggregateCaseAggregationsEnabled = preAggregateCaseAggregationsEnabled;
+        return this;
+    }
+
     public boolean isOptimizeMetadataQueries()
     {
         return optimizeMetadataQueries;
@@ -457,15 +472,32 @@ public class OptimizerConfig
         return this;
     }
 
-    public boolean isUseMarkDistinct()
+    @Deprecated
+    @Nullable
+    public Boolean isUseMarkDistinct()
     {
         return useMarkDistinct;
     }
 
-    @Config("optimizer.use-mark-distinct")
-    public OptimizerConfig setUseMarkDistinct(boolean value)
+    @Deprecated
+    @LegacyConfig(value = "optimizer.use-mark-distinct", replacedBy = "optimizer.mark-distinct-strategy")
+    public OptimizerConfig setUseMarkDistinct(Boolean value)
     {
         this.useMarkDistinct = value;
+        return this;
+    }
+
+    @Nullable
+    public MarkDistinctStrategy getMarkDistinctStrategy()
+    {
+        return markDistinctStrategy;
+    }
+
+    @Config("optimizer.mark-distinct-strategy")
+    @ConfigDescription("Strategy to use for distinct aggregations")
+    public OptimizerConfig setMarkDistinctStrategy(MarkDistinctStrategy markDistinctStrategy)
+    {
+        this.markDistinctStrategy = markDistinctStrategy;
         return this;
     }
 
@@ -727,6 +759,34 @@ public class OptimizerConfig
     public OptimizerConfig setJoinPartitionedBuildMinRowCount(long joinPartitionedBuildMinRowCount)
     {
         this.joinPartitionedBuildMinRowCount = joinPartitionedBuildMinRowCount;
+        return this;
+    }
+
+    @NotNull
+    public DataSize getMinInputSizePerTask()
+    {
+        return minInputSizePerTask;
+    }
+
+    @Config("optimizer.min-input-size-per-task")
+    @ConfigDescription("Minimum input data size required per task. This will help optimizer determine hash partition count for joins and aggregations")
+    public OptimizerConfig setMinInputSizePerTask(DataSize minInputSizePerTask)
+    {
+        this.minInputSizePerTask = minInputSizePerTask;
+        return this;
+    }
+
+    @Min(0)
+    public long getMinInputRowsPerTask()
+    {
+        return minInputRowsPerTask;
+    }
+
+    @Config("optimizer.min-input-rows-per-task")
+    @ConfigDescription("Minimum input rows required per task. This will help optimizer determine hash partition count for joins and aggregations")
+    public OptimizerConfig setMinInputRowsPerTask(long minInputRowsPerTask)
+    {
+        this.minInputRowsPerTask = minInputRowsPerTask;
         return this;
     }
 

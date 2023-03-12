@@ -66,12 +66,11 @@ public class SimpleFilterProjectSemiJoinStatsRule
     }
 
     @Override
-    protected Optional<PlanNodeStatsEstimate> doCalculate(FilterNode node, StatsProvider sourceStats, Lookup lookup, Session session, TypeProvider types)
+    protected Optional<PlanNodeStatsEstimate> doCalculate(FilterNode node, StatsProvider sourceStats, Lookup lookup, Session session, TypeProvider types, TableStatsProvider tableStatsProvider)
     {
         PlanNode nodeSource = lookup.resolve(node.getSource());
         SemiJoinNode semiJoinNode;
-        if (nodeSource instanceof ProjectNode) {
-            ProjectNode projectNode = (ProjectNode) nodeSource;
+        if (nodeSource instanceof ProjectNode projectNode) {
             if (!projectNode.isIdentity()) {
                 return Optional.empty();
             }

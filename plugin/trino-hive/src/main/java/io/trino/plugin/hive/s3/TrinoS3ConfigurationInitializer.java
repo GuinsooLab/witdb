@@ -15,17 +15,19 @@ package io.trino.plugin.hive.s3;
 
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import io.trino.plugin.hive.ConfigurationInitializer;
+import io.trino.hdfs.ConfigurationInitializer;
 import org.apache.hadoop.conf.Configuration;
 
 import javax.inject.Inject;
 
 import java.io.File;
 import java.util.List;
+import java.util.Optional;
 
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_ACCESS_KEY;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_ACL_TYPE;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_CONNECT_TIMEOUT;
+import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_CONNECT_TTL;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_ENCRYPTION_MATERIALS_PROVIDER;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_ENDPOINT;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_EXTERNAL_ID;
@@ -47,6 +49,7 @@ import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_PROXY_PASSWORD;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_PROXY_PORT;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_PROXY_PROTOCOL;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_PROXY_USERNAME;
+import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_REGION;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_REQUESTER_PAYS_ENABLED;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_SECRET_KEY;
 import static io.trino.plugin.hive.s3.TrinoS3FileSystem.S3_SIGNER_CLASS;
@@ -72,6 +75,7 @@ public class TrinoS3ConfigurationInitializer
     private final String awsAccessKey;
     private final String awsSecretKey;
     private final String endpoint;
+    private final String region;
     private final TrinoS3StorageClass s3StorageClass;
     private final TrinoS3SignerType signerType;
     private final boolean pathStyleAccess;
@@ -88,6 +92,7 @@ public class TrinoS3ConfigurationInitializer
     private final Duration maxBackoffTime;
     private final Duration maxRetryTime;
     private final Duration connectTimeout;
+    private final Optional<Duration> connectTtl;
     private final Duration socketTimeout;
     private final int maxConnections;
     private final DataSize multipartMinFileSize;
@@ -117,6 +122,7 @@ public class TrinoS3ConfigurationInitializer
         this.awsAccessKey = config.getS3AwsAccessKey();
         this.awsSecretKey = config.getS3AwsSecretKey();
         this.endpoint = config.getS3Endpoint();
+        this.region = config.getS3Region();
         this.s3StorageClass = config.getS3StorageClass();
         this.signerType = config.getS3SignerType();
         this.signerClass = config.getS3SignerClass();
@@ -134,6 +140,7 @@ public class TrinoS3ConfigurationInitializer
         this.maxBackoffTime = config.getS3MaxBackoffTime();
         this.maxRetryTime = config.getS3MaxRetryTime();
         this.connectTimeout = config.getS3ConnectTimeout();
+        this.connectTtl = config.getS3ConnectTtl();
         this.socketTimeout = config.getS3SocketTimeout();
         this.maxConnections = config.getS3MaxConnections();
         this.multipartMinFileSize = config.getS3MultipartMinFileSize();
@@ -174,6 +181,9 @@ public class TrinoS3ConfigurationInitializer
         if (endpoint != null) {
             config.set(S3_ENDPOINT, endpoint);
         }
+        if (region != null) {
+            config.set(S3_REGION, region);
+        }
         config.set(S3_STORAGE_CLASS, s3StorageClass.name());
         if (signerType != null) {
             config.set(S3_SIGNER_TYPE, signerType.name());
@@ -205,6 +215,7 @@ public class TrinoS3ConfigurationInitializer
         config.set(S3_MAX_BACKOFF_TIME, maxBackoffTime.toString());
         config.set(S3_MAX_RETRY_TIME, maxRetryTime.toString());
         config.set(S3_CONNECT_TIMEOUT, connectTimeout.toString());
+        connectTtl.ifPresent(duration -> config.set(S3_CONNECT_TTL, duration.toString()));
         config.set(S3_SOCKET_TIMEOUT, socketTimeout.toString());
         config.set(S3_STAGING_DIRECTORY, stagingDirectory.getPath());
         config.setInt(S3_MAX_CONNECTIONS, maxConnections);

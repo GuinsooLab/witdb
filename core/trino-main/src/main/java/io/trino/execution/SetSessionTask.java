@@ -15,12 +15,12 @@ package io.trino.execution;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.security.AccessControl;
 import io.trino.security.SecurityContext;
 import io.trino.spi.TrinoException;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.session.PropertyMetadata;
 import io.trino.spi.type.Type;
 import io.trino.sql.PlannerContext;
@@ -33,11 +33,11 @@ import javax.inject.Inject;
 import java.util.List;
 
 import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
+import static io.trino.execution.ParameterExtractor.bindParameters;
+import static io.trino.metadata.MetadataUtil.getRequiredCatalogHandle;
 import static io.trino.metadata.SessionPropertyManager.evaluatePropertyValue;
 import static io.trino.metadata.SessionPropertyManager.serializeSessionProperty;
-import static io.trino.spi.StandardErrorCode.CATALOG_NOT_FOUND;
 import static io.trino.spi.StandardErrorCode.INVALID_SESSION_PROPERTY;
-import static io.trino.sql.ParameterUtils.parameterExtractor;
 import static io.trino.sql.analyzer.SemanticExceptions.semanticException;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -85,10 +85,9 @@ public class SetSessionTask
                     .orElseThrow(() -> semanticException(INVALID_SESSION_PROPERTY, statement, "Session property '%s' does not exist", statement.getName()));
         }
         else {
-            CatalogName catalogName = plannerContext.getMetadata().getCatalogHandle(stateMachine.getSession(), parts.get(0))
-                    .orElseThrow(() -> semanticException(CATALOG_NOT_FOUND, statement, "Catalog '%s' does not exist", parts.get(0)));
+            CatalogHandle catalogHandle = getRequiredCatalogHandle(plannerContext.getMetadata(), stateMachine.getSession(), statement, parts.get(0));
             accessControl.checkCanSetCatalogSessionProperty(SecurityContext.of(session), parts.get(0), parts.get(1));
-            propertyMetadata = sessionPropertyManager.getConnectorSessionPropertyMetadata(catalogName, parts.get(1))
+            propertyMetadata = sessionPropertyManager.getConnectorSessionPropertyMetadata(catalogHandle, parts.get(1))
                     .orElseThrow(() -> semanticException(INVALID_SESSION_PROPERTY, statement, "Session property '%s' does not exist", statement.getName()));
         }
 
@@ -96,7 +95,7 @@ public class SetSessionTask
         Object objectValue;
 
         try {
-            objectValue = evaluatePropertyValue(statement.getValue(), type, session, plannerContext, accessControl, parameterExtractor(statement, parameters));
+            objectValue = evaluatePropertyValue(statement.getValue(), type, session, plannerContext, accessControl, bindParameters(statement, parameters));
         }
         catch (TrinoException e) {
             throw new TrinoException(

@@ -13,22 +13,24 @@
  */
 package io.trino.plugin.druid;
 
+import io.trino.Session;
 import io.trino.plugin.jdbc.BaseJdbcConnectorTest;
 import io.trino.plugin.jdbc.JdbcTableHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.sql.planner.assertions.PlanMatchPattern;
 import io.trino.sql.planner.plan.AggregationNode;
+import io.trino.sql.planner.plan.FilterNode;
 import io.trino.sql.planner.plan.JoinNode;
 import io.trino.sql.planner.plan.TableScanNode;
 import io.trino.sql.planner.plan.TopNNode;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.TestingConnectorBehavior;
-import io.trino.testing.assertions.Assert;
 import io.trino.testing.sql.SqlExecutor;
 import org.intellij.lang.annotations.Language;
 import org.testng.SkipException;
 import org.testng.annotations.AfterClass;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import static io.trino.plugin.druid.DruidQueryRunner.copyAndIngestTpchData;
@@ -36,7 +38,10 @@ import static io.trino.plugin.druid.DruidTpchTables.SELECT_FROM_ORDERS;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.node;
+import static io.trino.sql.planner.assertions.PlanMatchPattern.output;
+import static io.trino.sql.planner.assertions.PlanMatchPattern.values;
 import static io.trino.testing.MaterializedResult.resultBuilder;
+import static java.lang.String.format;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertFalse;
@@ -51,25 +56,39 @@ public abstract class BaseDruidConnectorTest
     {
         if (druidServer != null) {
             druidServer.close();
+            druidServer = null;
         }
     }
 
+    @SuppressWarnings("DuplicateBranchesInSwitch")
     @Override
     protected boolean hasBehavior(TestingConnectorBehavior connectorBehavior)
     {
         switch (connectorBehavior) {
-            case SUPPORTS_DELETE:
-            case SUPPORTS_INSERT:
-            case SUPPORTS_CREATE_SCHEMA:
-            case SUPPORTS_CREATE_TABLE:
-            case SUPPORTS_CREATE_TABLE_WITH_DATA:
-            case SUPPORTS_ADD_COLUMN:
-            case SUPPORTS_RENAME_TABLE:
-            case SUPPORTS_COMMENT_ON_COLUMN:
-            case SUPPORTS_COMMENT_ON_TABLE:
             case SUPPORTS_TOPN_PUSHDOWN:
             case SUPPORTS_AGGREGATION_PUSHDOWN:
                 return false;
+
+            case SUPPORTS_CREATE_SCHEMA:
+                return false;
+
+            case SUPPORTS_CREATE_TABLE:
+            case SUPPORTS_RENAME_TABLE:
+                return false;
+
+            case SUPPORTS_ADD_COLUMN:
+            case SUPPORTS_RENAME_COLUMN:
+            case SUPPORTS_SET_COLUMN_TYPE:
+                return false;
+
+            case SUPPORTS_COMMENT_ON_TABLE:
+            case SUPPORTS_COMMENT_ON_COLUMN:
+                return false;
+
+            case SUPPORTS_INSERT:
+            case SUPPORTS_DELETE:
+                return false;
+
             default:
                 return super.hasBehavior(connectorBehavior);
         }
@@ -81,11 +100,10 @@ public abstract class BaseDruidConnectorTest
         return druidServer::execute;
     }
 
-    @Test
     @Override
-    public void testDescribeTable()
+    protected MaterializedResult getDescribeOrdersResult()
     {
-        MaterializedResult expectedColumns = MaterializedResult.resultBuilder(getSession(), VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+        return resultBuilder(getSession(), VARCHAR, VARCHAR, VARCHAR, VARCHAR)
                 .row("__time", "timestamp(3)", "", "")
                 .row("clerk", "varchar", "", "") // String columns are reported only as varchar
                 .row("comment", "varchar", "", "")
@@ -97,29 +115,12 @@ public abstract class BaseDruidConnectorTest
                 .row("shippriority", "bigint", "", "") // Druid doesn't support int type
                 .row("totalprice", "double", "", "")
                 .build();
-        MaterializedResult actualColumns = computeActual("DESCRIBE orders");
-        Assert.assertEquals(actualColumns, expectedColumns);
     }
 
     @Override
     public void testShowColumns()
     {
-        MaterializedResult actual = computeActual("SHOW COLUMNS FROM orders");
-
-        MaterializedResult expected = resultBuilder(getSession(), VARCHAR, VARCHAR, VARCHAR, VARCHAR)
-                .row("__time", "timestamp(3)", "", "")
-                .row("clerk", "varchar", "", "")
-                .row("comment", "varchar", "", "")
-                .row("custkey", "bigint", "", "")
-                .row("orderdate", "varchar", "", "")
-                .row("orderkey", "bigint", "", "")
-                .row("orderpriority", "varchar", "", "")
-                .row("orderstatus", "varchar", "", "")
-                .row("shippriority", "bigint", "", "")
-                .row("totalprice", "double", "", "")
-                .build();
-
-        assertThat(actual).isEqualTo(expected);
+        assertThat(query("SHOW COLUMNS FROM orders")).matches(getDescribeOrdersResult());
     }
 
     @Test
@@ -219,8 +220,7 @@ public abstract class BaseDruidConnectorTest
                 .row("shippriority", "bigint", "", "") // Druid doesn't support int type
                 .row("totalprice", "double", "", "")
                 .build();
-        MaterializedResult actualColumns = computeActual("DESCRIBE " + datasourceA);
-        Assert.assertEquals(actualColumns, expectedColumns);
+        assertThat(query("DESCRIBE " + datasourceA)).matches(expectedColumns);
 
         // Assert that only columns from datsourceB are returned
         expectedColumns = MaterializedResult.resultBuilder(getSession(), VARCHAR, VARCHAR, VARCHAR, VARCHAR)
@@ -235,8 +235,7 @@ public abstract class BaseDruidConnectorTest
                 .row("shippriority_x", "bigint", "", "") // Druid doesn't support int type
                 .row("totalprice_x", "double", "", "")
                 .build();
-        actualColumns = computeActual("DESCRIBE " + datasourceB);
-        Assert.assertEquals(actualColumns, expectedColumns);
+        assertThat(query("DESCRIBE " + datasourceB)).matches(expectedColumns);
     }
 
     @Test
@@ -322,5 +321,247 @@ public abstract class BaseDruidConnectorTest
     public void testNativeQueryInsertStatementTableExists()
     {
         throw new SkipException("cannot create test table for Druid");
+    }
+
+    @Test
+    public void testPredicatePushdown()
+    {
+        // varchar equality
+        assertThat(query("SELECT regionkey, nationkey, name FROM nation WHERE name = 'ROMANIA'"))
+                .matches("VALUES (BIGINT '3', BIGINT '19', CAST('ROMANIA' AS varchar))")
+                .isFullyPushedDown();
+
+        // varchar range
+        assertThat(query("SELECT regionkey, nationkey, name FROM nation WHERE name BETWEEN 'POLAND' AND 'RPA'"))
+                .matches("VALUES (BIGINT '3', BIGINT '19', CAST('ROMANIA' AS varchar))")
+                .isFullyPushedDown();
+
+        // varchar IN without domain compaction
+        assertThat(query("SELECT regionkey, nationkey, name FROM nation WHERE name IN ('POLAND', 'ROMANIA', 'VIETNAM')"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '19', CAST('ROMANIA' AS varchar)), " +
+                        "(BIGINT '2', BIGINT '21', CAST('VIETNAM' AS varchar))")
+                .isFullyPushedDown();
+
+        // varchar IN with small compaction threshold
+        assertThat(query(
+                Session.builder(getSession())
+                        .setCatalogSessionProperty("druid", "domain_compaction_threshold", "1")
+                        .build(),
+                "SELECT regionkey, nationkey, name FROM nation WHERE name IN ('POLAND', 'ROMANIA', 'VIETNAM')"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '19', CAST('ROMANIA' AS varchar)), " +
+                        "(BIGINT '2', BIGINT '21', CAST('VIETNAM' AS varchar))")
+                // Filter node is retained as no constraint is pushed into connector.
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // varchar different case
+        assertThat(query("SELECT regionkey, nationkey, name FROM nation WHERE name = 'romania'"))
+                .returnsEmptyResult()
+                .isFullyPushedDown();
+
+        // bigint equality
+        assertThat(query("SELECT regionkey, nationkey, name FROM nation WHERE nationkey = 19"))
+                .matches("VALUES (BIGINT '3', BIGINT '19', CAST('ROMANIA' AS varchar))")
+                .isFullyPushedDown();
+
+        // bigint equality with small compaction threshold
+        assertThat(query(
+                Session.builder(getSession())
+                        .setCatalogSessionProperty("druid", "domain_compaction_threshold", "1")
+                        .build(),
+                "SELECT regionkey, nationkey, name FROM nation WHERE nationkey IN (19, 21)"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '19', CAST('ROMANIA' AS varchar)), " +
+                        "(BIGINT '2', BIGINT '21', CAST('VIETNAM' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // bigint range, with decimal to bigint simplification
+        assertThat(query("SELECT regionkey, nationkey, name FROM nation WHERE nationkey BETWEEN 18.5 AND 19.5"))
+                .matches("VALUES (BIGINT '3', BIGINT '19', CAST('ROMANIA' AS varchar))")
+                .isFullyPushedDown();
+
+        // Druid doesn't support Aggregation Pushdown
+        assertThat(query("SELECT * FROM (SELECT regionkey, sum(nationkey) FROM nation GROUP BY regionkey) WHERE regionkey = 3"))
+                .matches("VALUES (BIGINT '3', BIGINT '77')")
+                .isNotFullyPushedDown(AggregationNode.class);
+
+        // Druid doesn't support Aggregation Pushdown
+        assertThat(query("SELECT regionkey, sum(nationkey) FROM nation GROUP BY regionkey HAVING sum(nationkey) = 77"))
+                .matches("VALUES (BIGINT '3', BIGINT '77')")
+                .isNotFullyPushedDown(AggregationNode.class);
+    }
+
+    @Test
+    public void testPredicatePushdownForTimestampWithSecondsPrecision()
+    {
+        // timestamp equality
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time = TIMESTAMP '1992-01-04 00:00:00'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isFullyPushedDown();
+
+        // timestamp comparison
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time < TIMESTAMP '1992-01-05'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isFullyPushedDown();
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time <= TIMESTAMP '1992-01-04'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isFullyPushedDown();
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time > TIMESTAMP '1998-11-28'"))
+                .matches("VALUES " +
+                        "(BIGINT '2', BIGINT '370', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '2', BIGINT '468', CAST('AIR' AS varchar))")
+                .isFullyPushedDown();
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time >= TIMESTAMP '1998-11-29 00:00:00'"))
+                .matches("VALUES " +
+                        "(BIGINT '2', BIGINT '370', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '2', BIGINT '468', CAST('AIR' AS varchar))")
+                .isFullyPushedDown();
+
+        // timestamp range
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time BETWEEN TIMESTAMP '1992-01-01' AND TIMESTAMP '1992-01-05'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isFullyPushedDown();
+
+        // varchar IN without domain compaction
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time IN (TIMESTAMP '1992-01-04', TIMESTAMP '1998-11-27 00:00:00.000', TIMESTAMP '1998-11-28')"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '1', BIGINT '574', CAST('AIR' AS varchar))")
+                .isFullyPushedDown();
+
+        // varchar IN with small compaction threshold
+        assertThat(query(
+                Session.builder(getSession())
+                        .setCatalogSessionProperty("druid", "domain_compaction_threshold", "1")
+                        .build(),
+                "SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time IN (TIMESTAMP '1992-01-04', TIMESTAMP '1998-11-27 00:00:00', TIMESTAMP '1998-11-28')"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '1', BIGINT '574', CAST('AIR' AS varchar))")
+                // Filter node is retained as no constraint is pushed into connector.
+                .isNotFullyPushedDown(FilterNode.class);
+    }
+
+    @Test
+    public void testPredicatePushdownForTimestampWithMillisPrecision()
+    {
+        // timestamp equality
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time = TIMESTAMP '1992-01-04 00:00:00.001'"))
+                .returnsEmptyResult()
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // timestamp comparison
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time < TIMESTAMP '1992-01-05 00:00:00.001'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time <= TIMESTAMP '1992-01-04 00:00:00.001'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time > TIMESTAMP '1998-11-28 00:00:00.001'"))
+                .matches("VALUES " +
+                        "(BIGINT '2', BIGINT '370', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '2', BIGINT '468', CAST('AIR' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time >= TIMESTAMP '1998-11-29 00:00:00.001'"))
+                .returnsEmptyResult()
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // timestamp range
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time BETWEEN TIMESTAMP '1992-01-01 00:00:00.001' AND TIMESTAMP '1992-01-05'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time BETWEEN TIMESTAMP '1992-01-01' AND TIMESTAMP '1992-01-05 00:00:00.001'"))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // timestamp IN without domain compaction
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time IN (TIMESTAMP '1992-01-04', TIMESTAMP '1998-11-27 00:00:00.000', TIMESTAMP '1998-11-28')"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '1', BIGINT '574', CAST('AIR' AS varchar))")
+                .isFullyPushedDown();
+
+        assertThat(query("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time IN (TIMESTAMP '1992-01-04', TIMESTAMP '1998-11-27', TIMESTAMP '1998-11-28 00:00:00.001')"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '1', BIGINT '574', CAST('AIR' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // timestamp IN with small compaction threshold
+        assertThat(query(
+                Session.builder(getSession())
+                        .setCatalogSessionProperty("druid", "domain_compaction_threshold", "1")
+                        .build(),
+                "SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time IN (TIMESTAMP '1992-01-04', TIMESTAMP '1998-11-27 00:00:00.000', TIMESTAMP '1998-11-28')"))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '1', BIGINT '574', CAST('AIR' AS varchar))")
+                // Filter node is retained as no constraint is pushed into connector.
+                .isNotFullyPushedDown(FilterNode.class);
+    }
+
+    @Test(dataProvider = "timestampValuesProvider")
+    public void testPredicatePushdownForTimestampWithHigherPrecision(String timestamp)
+    {
+        // timestamp equality
+        assertThat(query(format("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time = TIMESTAMP '%s'", timestamp)))
+                .returnsEmptyResult()
+                .matches(output(
+                        values("linenumber", "partkey", "shipmode")));
+
+        // timestamp comparison
+        assertThat(query(format("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time < TIMESTAMP '%s'", timestamp)))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        assertThat(query(format("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time <= TIMESTAMP '%s'", timestamp)))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        assertThat(query(format("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time > (TIMESTAMP '%s' + INTERVAL '2520' DAY)", timestamp)))
+                .matches("VALUES " +
+                        "(BIGINT '2', BIGINT '370', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '2', BIGINT '468', CAST('AIR' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        assertThat(query(format("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time >= (TIMESTAMP '%s' + INTERVAL '2521' DAY)", timestamp)))
+                .returnsEmptyResult()
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // timestamp range
+        assertThat(query(format("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time BETWEEN TIMESTAMP '1992-01-04' AND TIMESTAMP '%s'", timestamp)))
+                .matches("VALUES (BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+
+        // varchar IN without domain compaction
+        assertThat(query(format("SELECT linenumber, partkey, shipmode FROM lineitem WHERE __time IN (TIMESTAMP '1992-01-04', TIMESTAMP '1998-11-27', TIMESTAMP '%s')", timestamp)))
+                .matches("VALUES " +
+                        "(BIGINT '3', BIGINT '1673', CAST('RAIL' AS varchar)), " +
+                        "(BIGINT '1', BIGINT '574', CAST('AIR' AS varchar))")
+                .isNotFullyPushedDown(FilterNode.class);
+    }
+
+    @DataProvider
+    public Object[][] timestampValuesProvider()
+    {
+        return new Object[][] {
+                {"1992-01-04 00:00:00.1234"},
+                {"1992-01-04 00:00:00.12345"},
+                {"1992-01-04 00:00:00.123456"},
+                {"1992-01-04 00:00:00.1234567"},
+                {"1992-01-04 00:00:00.12345678"},
+                {"1992-01-04 00:00:00.123456789"},
+                {"1992-01-04 00:00:00.1234567891"},
+                {"1992-01-04 00:00:00.12345678912"},
+                {"1992-01-04 00:00:00.123456789123"}
+        };
     }
 }

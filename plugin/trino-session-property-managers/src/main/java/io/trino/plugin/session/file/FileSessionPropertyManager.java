@@ -32,7 +32,6 @@ import java.util.List;
 
 import static com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES;
 import static java.lang.String.format;
-import static java.util.Objects.requireNonNull;
 
 public class FileSessionPropertyManager
         extends AbstractSessionPropertyManager
@@ -46,8 +45,6 @@ public class FileSessionPropertyManager
     @Inject
     public FileSessionPropertyManager(FileSessionPropertyManagerConfig config)
     {
-        requireNonNull(config, "config is null");
-
         Path configurationFile = config.getConfigFile().toPath();
         try {
             sessionMatchSpecs = ImmutableList.copyOf(CODEC.fromJson(Files.readAllBytes(configurationFile)));
@@ -57,8 +54,7 @@ public class FileSessionPropertyManager
         }
         catch (IllegalArgumentException e) {
             Throwable cause = e.getCause();
-            if (cause instanceof UnrecognizedPropertyException) {
-                UnrecognizedPropertyException ex = (UnrecognizedPropertyException) cause;
+            if (cause instanceof UnrecognizedPropertyException ex) {
                 String message = format("Unknown property at line %s:%s: %s",
                         ex.getLocation().getLineNr(),
                         ex.getLocation().getColumnNr(),

@@ -28,6 +28,7 @@ import io.airlift.bytecode.Scope;
 import io.airlift.bytecode.Variable;
 import io.airlift.bytecode.control.IfStatement;
 import io.airlift.bytecode.expression.BytecodeExpression;
+import io.airlift.slice.SizeOf;
 import io.airlift.slice.Slice;
 import io.trino.array.BlockBigArray;
 import io.trino.array.BooleanBigArray;
@@ -50,7 +51,6 @@ import io.trino.spi.type.RowType;
 import io.trino.spi.type.Type;
 import io.trino.sql.gen.CallSiteBinder;
 import io.trino.sql.gen.SqlTypeBytecodeExpression;
-import org.openjdk.jol.info.ClassLayout;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
@@ -91,8 +91,10 @@ import static io.airlift.bytecode.expression.BytecodeExpressions.constantTrue;
 import static io.airlift.bytecode.expression.BytecodeExpressions.defaultValue;
 import static io.airlift.bytecode.expression.BytecodeExpressions.equal;
 import static io.airlift.bytecode.expression.BytecodeExpressions.getStatic;
+import static io.airlift.bytecode.expression.BytecodeExpressions.invokeStatic;
 import static io.airlift.bytecode.expression.BytecodeExpressions.isNull;
 import static io.airlift.bytecode.expression.BytecodeExpressions.newInstance;
+import static io.airlift.bytecode.expression.BytecodeExpressions.setStatic;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.DoubleType.DOUBLE;
@@ -830,12 +832,7 @@ public final class StateCompiler
         FieldDefinition instanceSize = definition.declareField(a(PRIVATE, STATIC, FINAL), "INSTANCE_SIZE", long.class);
         definition.getClassInitializer()
                 .getBody()
-                .comment("INSTANCE_SIZE = ClassLayout.parseClass(%s.class).instanceSize()", definition.getName())
-                .push(definition.getType())
-                .invokeStatic(ClassLayout.class, "parseClass", ClassLayout.class, Class.class)
-                .invokeVirtual(ClassLayout.class, "instanceSize", int.class)
-                .intToLong()
-                .putStaticField(instanceSize);
+                .append(setStatic(instanceSize, invokeStatic(SizeOf.class, "instanceSize", int.class, constantClass(definition.getType())).cast(long.class)));
         return instanceSize;
     }
 
@@ -1151,10 +1148,7 @@ public final class StateCompiler
 
         Type getSqlType()
         {
-            if (sqlType.isEmpty()) {
-                throw new IllegalArgumentException("Unsupported type: " + type);
-            }
-            return sqlType.get();
+            return sqlType.orElseThrow(() -> new IllegalArgumentException("Unsupported type: " + type));
         }
 
         boolean isPrimitiveType()

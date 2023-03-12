@@ -24,14 +24,14 @@ import io.airlift.slice.Slice;
 import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import io.trino.connector.CatalogName;
 import io.trino.execution.buffer.BufferResult;
 import io.trino.execution.buffer.BufferState;
 import io.trino.execution.buffer.OutputBuffer;
 import io.trino.execution.buffer.OutputBufferStateMachine;
-import io.trino.execution.buffer.OutputBuffers.OutputBufferId;
 import io.trino.execution.buffer.PagesSerdeFactory;
 import io.trino.execution.buffer.PartitionedOutputBuffer;
+import io.trino.execution.buffer.PipelinedOutputBuffers;
+import io.trino.execution.buffer.PipelinedOutputBuffers.OutputBufferId;
 import io.trino.execution.executor.TaskExecutor;
 import io.trino.memory.MemoryPool;
 import io.trino.memory.QueryContext;
@@ -49,15 +49,12 @@ import io.trino.spi.Page;
 import io.trino.spi.QueryId;
 import io.trino.spi.block.TestingBlockEncodingSerde;
 import io.trino.spi.connector.ConnectorSplit;
-import io.trino.spi.connector.UpdatablePageSource;
 import io.trino.spiller.SpillSpaceTracker;
 import io.trino.sql.planner.LocalExecutionPlanner.LocalExecutionPlan;
 import io.trino.sql.planner.plan.PlanNodeId;
-import org.openjdk.jol.info.ClassLayout;
 import org.testng.annotations.Test;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -68,6 +65,7 @@ import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.concurrent.Threads.threadsNamed;
+import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.trino.SessionTestUtils.TEST_SESSION;
@@ -77,10 +75,10 @@ import static io.trino.execution.TaskState.FLUSHING;
 import static io.trino.execution.TaskState.RUNNING;
 import static io.trino.execution.TaskTestUtils.TABLE_SCAN_NODE_ID;
 import static io.trino.execution.TaskTestUtils.createTestSplitMonitor;
-import static io.trino.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
-import static io.trino.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
-import static io.trino.execution.buffer.PagesSerde.getSerializedPagePositionCount;
+import static io.trino.execution.buffer.PagesSerdeUtil.getSerializedPagePositionCount;
+import static io.trino.execution.buffer.PipelinedOutputBuffers.BufferType.PARTITIONED;
 import static io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_HANDLE;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.HOURS;
@@ -92,7 +90,6 @@ import static org.testng.Assert.assertFalse;
 public class TestSqlTaskExecution
 {
     private static final OutputBufferId OUTPUT_BUFFER_ID = new OutputBufferId(0);
-    private static final CatalogName CONNECTOR_ID = new CatalogName("test");
     private static final Duration ASSERT_WAIT_TIMEOUT = new Duration(1, HOURS);
     public static final TaskId TASK_ID = new TaskId(new StageId("query", 0), 0, 0);
 
@@ -103,8 +100,8 @@ public class TestSqlTaskExecution
         ScheduledExecutorService taskNotificationExecutor = newScheduledThreadPool(10, threadsNamed("task-notification-%s"));
         ScheduledExecutorService driverYieldExecutor = newScheduledThreadPool(2, threadsNamed("driver-yield-%s"));
         TaskExecutor taskExecutor = new TaskExecutor(5, 10, 3, 4, Ticker.systemTicker());
-        taskExecutor.start();
 
+        taskExecutor.start();
         try {
             TaskStateMachine taskStateMachine = new TaskStateMachine(TASK_ID, taskNotificationExecutor);
             PartitionedOutputBuffer outputBuffer = newTestingOutputBuffer(taskNotificationExecutor);
@@ -136,23 +133,38 @@ public class TestSqlTaskExecution
                             OptionalInt.empty())),
                     ImmutableList.of(TABLE_SCAN_NODE_ID));
             TaskContext taskContext = newTestingTaskContext(taskNotificationExecutor, driverYieldExecutor, taskStateMachine);
-            SqlTaskExecution sqlTaskExecution = SqlTaskExecution.createSqlTaskExecution(
+            SqlTaskExecution sqlTaskExecution = new SqlTaskExecution(
                     taskStateMachine,
                     taskContext,
                     outputBuffer,
                     localExecutionPlan,
                     taskExecutor,
-                    taskNotificationExecutor,
-                    createTestSplitMonitor());
+                    createTestSplitMonitor(),
+                    taskNotificationExecutor);
+            sqlTaskExecution.start();
 
             //
             // test body
             assertEquals(taskStateMachine.getState(), RUNNING);
 
             // add assignment for pipeline
+            try {
+                // add a splitAssignments with a larger split sequence ID and a different plan node ID
+                PlanNodeId tableScanNodeId = new PlanNodeId("tableScan1");
+                sqlTaskExecution.addSplitAssignments(ImmutableList.of(new SplitAssignment(
+                        tableScanNodeId,
+                        ImmutableSet.of(newScheduledSplit(3, tableScanNodeId, 400000, 400)),
+                        false)));
+            }
+            catch (NullPointerException e) {
+                // this is expected since there is no pipeline for this
+                // the purpose of this splitAssignment is setting maxAcknowledgedSplitByPlanNode in SqlTaskExecution with the larger split sequence ID
+            }
+            // the split below shouldn't be skipped even though its sequence ID is smaller than the sequence ID of the previous split because they have different plan node IDs
             sqlTaskExecution.addSplitAssignments(ImmutableList.of(new SplitAssignment(
                     TABLE_SCAN_NODE_ID,
-                    ImmutableSet.of(newScheduledSplit(0, TABLE_SCAN_NODE_ID, 100000, 123)),
+                    ImmutableSet.of(
+                            newScheduledSplit(0, TABLE_SCAN_NODE_ID, 100000, 123)),
                     false)));
             // assert that partial task result is produced
             outputBufferConsumer.consume(123, ASSERT_WAIT_TIMEOUT);
@@ -206,7 +218,7 @@ public class TestSqlTaskExecution
         return new PartitionedOutputBuffer(
                 TASK_ID.toString(),
                 new OutputBufferStateMachine(TASK_ID, taskNotificationExecutor),
-                createInitialEmptyOutputBuffers(PARTITIONED)
+                PipelinedOutputBuffers.createInitial(PARTITIONED)
                         .withBuffer(OUTPUT_BUFFER_ID, 0)
                         .withNoMoreBufferIds(),
                 DataSize.of(1, MEGABYTE),
@@ -285,7 +297,7 @@ public class TestSqlTaskExecution
 
     private ScheduledSplit newScheduledSplit(int sequenceId, PlanNodeId planNodeId, int begin, int count)
     {
-        return new ScheduledSplit(sequenceId, planNodeId, new Split(CONNECTOR_ID, new TestingSplit(begin, begin + count)));
+        return new ScheduledSplit(sequenceId, planNodeId, new Split(TEST_CATALOG_HANDLE, new TestingSplit(begin, begin + count)));
     }
 
     public static class Pauser
@@ -404,18 +416,17 @@ public class TestSqlTaskExecution
             }
 
             @Override
-            public Supplier<Optional<UpdatablePageSource>> addSplit(Split split)
+            public void addSplit(Split split)
             {
                 requireNonNull(split, "split is null");
                 checkState(this.split == null, "Table scan split already set");
 
                 if (finished) {
-                    return Optional::empty;
+                    return;
                 }
 
                 this.split = (TestingSplit) split.getConnectorSplit();
                 blocked.set(null);
-                return Optional::empty;
             }
 
             @Override
@@ -481,7 +492,7 @@ public class TestSqlTaskExecution
     public static class TestingSplit
             implements ConnectorSplit
     {
-        private static final int INSTANCE_SIZE = ClassLayout.parseClass(TestingSplit.class).instanceSize();
+        private static final int INSTANCE_SIZE = instanceSize(TestingSplit.class);
 
         private final int begin;
         private final int end;

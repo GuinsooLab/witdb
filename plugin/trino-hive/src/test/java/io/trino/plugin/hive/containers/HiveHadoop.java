@@ -83,9 +83,14 @@ public class HiveHadoop
         log.info("Hive container started with addresses for metastore: %s", getHiveMetastoreEndpoint());
     }
 
-    public void runOnHive(String query)
+    public String runOnHive(String query)
     {
-        executeInContainerFailOnError("beeline", "-u", "jdbc:hive2://localhost:10000/default", "-n", "hive", "-e", query);
+        return executeInContainerFailOnError("beeline", "-u", "jdbc:hive2://localhost:10000/default", "-n", "hive", "-e", query);
+    }
+
+    public String runOnMetastore(String query)
+    {
+        return executeInContainerFailOnError("mysql", "-D", "metastore", "-uroot", "-proot", "--batch", "--column-names=false", "-e", query).replaceAll("\n$", "");
     }
 
     public HostAndPort getHiveMetastoreEndpoint()

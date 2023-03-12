@@ -167,7 +167,7 @@ public class KuduClientSession
         Optional<List<ColumnHandle>> desiredColumns = tableHandle.getDesiredColumns();
 
         List<Integer> columnIndexes;
-        if (tableHandle.isDeleteHandle()) {
+        if (tableHandle.isRequiresRowId()) {
             if (desiredColumns.isPresent()) {
                 columnIndexes = IntStream
                         .range(0, primaryKeyColumnCount)
@@ -420,8 +420,7 @@ public class KuduClientSession
 
     private void setTypeAttributes(ColumnMetadata columnMetadata, ColumnSchemaBuilder builder)
     {
-        if (columnMetadata.getType() instanceof DecimalType) {
-            DecimalType type = (DecimalType) columnMetadata.getType();
+        if (columnMetadata.getType() instanceof DecimalType type) {
             ColumnTypeAttributes attributes = new ColumnTypeAttributes.ColumnTypeAttributesBuilder()
                     .precision(type.getPrecision())
                     .scale(type.getScale()).build();

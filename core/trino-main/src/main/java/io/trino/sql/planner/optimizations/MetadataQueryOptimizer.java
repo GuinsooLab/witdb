@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import io.trino.Session;
 import io.trino.SystemSessionProperties;
+import io.trino.cost.TableStatsProvider;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.TableProperties;
 import io.trino.spi.connector.ColumnHandle;
@@ -73,7 +74,7 @@ public class MetadataQueryOptimizer
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector, TableStatsProvider tableStatsProvider)
     {
         if (!SystemSessionProperties.isOptimizeMetadataQueries(session)) {
             return plan;
@@ -161,9 +162,7 @@ public class MetadataQueryOptimizer
                             // partition key does not have a single value, so bail out to be safe
                             return context.defaultRewrite(node);
                         }
-                        else {
-                            rowBuilder.add(literalEncoder.toExpression(session, value.getValue(), type));
-                        }
+                        rowBuilder.add(literalEncoder.toExpression(session, value.getValue(), type));
                     }
                     rowsBuilder.add(new Row(rowBuilder.build()));
                 }
@@ -185,16 +184,15 @@ public class MetadataQueryOptimizer
                         source instanceof SortNode) {
                     source = source.getSources().get(0);
                 }
-                else if (source instanceof ProjectNode) {
+                else if (source instanceof ProjectNode project) {
                     // verify projections are deterministic
-                    ProjectNode project = (ProjectNode) source;
                     if (!Iterables.all(project.getAssignments().getExpressions(), expression -> isDeterministic(expression, plannerContext.getMetadata()))) {
                         return Optional.empty();
                     }
                     source = project.getSource();
                 }
-                else if (source instanceof TableScanNode) {
-                    return Optional.of((TableScanNode) source);
+                else if (source instanceof TableScanNode tableScanNode) {
+                    return Optional.of(tableScanNode);
                 }
                 else {
                     return Optional.empty();

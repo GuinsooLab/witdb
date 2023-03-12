@@ -46,7 +46,7 @@ public class UnionStatsRule
     }
 
     @Override
-    protected final Optional<PlanNodeStatsEstimate> doCalculate(UnionNode node, StatsProvider statsProvider, Lookup lookup, Session session, TypeProvider types)
+    protected final Optional<PlanNodeStatsEstimate> doCalculate(UnionNode node, StatsProvider statsProvider, Lookup lookup, Session session, TypeProvider types, TableStatsProvider tableStatsProvider)
     {
         checkArgument(!node.getSources().isEmpty(), "Empty Union is not supported");
 
@@ -73,7 +73,7 @@ public class UnionStatsRule
         PlanNodeStatsEstimate.Builder mapped = PlanNodeStatsEstimate.builder()
                 .setOutputRowCount(estimate.getOutputRowCount());
 
-        mapping.keySet().stream()
+        mapping.keySet()
                 .forEach(symbol -> mapped.addSymbolStatistics(symbol, estimate.getSymbolStatistics(mapping.get(symbol).get(index))));
 
         return mapped.build();

@@ -20,6 +20,7 @@ import io.trino.sql.planner.Symbol;
 import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.Join;
 import io.trino.sql.tree.Node;
+import io.trino.sql.tree.NullLiteral;
 
 import javax.annotation.concurrent.Immutable;
 
@@ -60,19 +61,12 @@ public class CorrelatedJoinNode
 
         public static Type typeConvert(Join.Type joinType)
         {
-            switch (joinType) {
-                case CROSS:
-                case IMPLICIT:
-                case INNER:
-                    return Type.INNER;
-                case LEFT:
-                    return Type.LEFT;
-                case RIGHT:
-                    return Type.RIGHT;
-                case FULL:
-                    return Type.FULL;
-            }
-            throw new UnsupportedOperationException("Unsupported join type: " + joinType);
+            return switch (joinType) {
+                case CROSS, IMPLICIT, INNER -> Type.INNER;
+                case LEFT -> Type.LEFT;
+                case RIGHT -> Type.RIGHT;
+                case FULL -> Type.FULL;
+            };
         }
     }
 
@@ -107,6 +101,9 @@ public class CorrelatedJoinNode
         requireNonNull(subquery, "subquery is null");
         requireNonNull(correlation, "correlation is null");
         requireNonNull(filter, "filter is null");
+        // The condition doesn't guarantee that filter is of type boolean, but was found to be a practical way to identify
+        // places where CorrelatedJoinNode could be created without appropriate coercions.
+        checkArgument(!(filter instanceof NullLiteral), "Filter must be an expression of boolean type: %s", filter);
         requireNonNull(originSubquery, "originSubquery is null");
 
         checkArgument(input.getOutputSymbols().containsAll(correlation), "Input does not contain symbols from correlation");

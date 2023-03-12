@@ -36,6 +36,7 @@ public class TestFeaturesConfig
     public void testDefaults()
     {
         assertRecordedDefaults(recordDefaults(FeaturesConfig.class)
+                .setLegacyCatalogRoles(false)
                 .setRedistributeWrites(true)
                 .setScaleWriters(true)
                 .setWriterMinSize(DataSize.of(32, MEGABYTE))
@@ -51,7 +52,6 @@ public class TestFeaturesConfig
                 .setMemoryRevokingTarget(0.5)
                 .setExchangeCompressionEnabled(false)
                 .setExchangeDataIntegrityVerification(DataIntegrityVerification.ABORT)
-                .setLegacyRowToJsonCast(false)
                 .setParseDecimalLiteralsAsDouble(false)
                 .setPagesIndexEagerCompactionEnabled(false)
                 .setFilterAndProjectMinOutputPageSize(DataSize.of(500, KILOBYTE))
@@ -62,9 +62,11 @@ public class TestFeaturesConfig
                 .setOmitDateTimeTypePrecision(false)
                 .setLegacyCatalogRoles(false)
                 .setIncrementalHashArrayLoadFactorEnabled(true)
+                .setLegacyMaterializedViewGracePeriod(false)
                 .setHideInaccessibleColumns(false)
                 .setAllowSetViewAuthorization(false)
-                .setForceSpillingJoin(false));
+                .setForceSpillingJoin(false)
+                .setFaultTolerantExecutionExchangeEncryptionEnabled(true));
     }
 
     @Test
@@ -86,7 +88,6 @@ public class TestFeaturesConfig
                 .put("memory-revoking-target", "0.8")
                 .put("exchange.compression-enabled", "true")
                 .put("exchange.data-integrity-verification", "RETRY")
-                .put("deprecated.legacy-row-to-json-cast", "true")
                 .put("parse-decimal-literals-as-double", "true")
                 .put("pages-index.eager-compaction-enabled", "true")
                 .put("filter-and-project-min-output-page-size", "1MB")
@@ -97,9 +98,11 @@ public class TestFeaturesConfig
                 .put("deprecated.omit-datetime-type-precision", "true")
                 .put("deprecated.legacy-catalog-roles", "true")
                 .put("incremental-hash-array-load-factor.enabled", "false")
+                .put("legacy.materialized-view-grace-period", "true")
                 .put("hide-inaccessible-columns", "true")
                 .put("legacy.allow-set-view-authorization", "true")
                 .put("force-spilling-join-operator", "true")
+                .put("fault-tolerant-execution.exchange-encryption-enabled", "false")
                 .buildOrThrow();
 
         FeaturesConfig expected = new FeaturesConfig()
@@ -118,7 +121,6 @@ public class TestFeaturesConfig
                 .setMemoryRevokingTarget(0.8)
                 .setExchangeCompressionEnabled(true)
                 .setExchangeDataIntegrityVerification(DataIntegrityVerification.RETRY)
-                .setLegacyRowToJsonCast(true)
                 .setParseDecimalLiteralsAsDouble(true)
                 .setPagesIndexEagerCompactionEnabled(true)
                 .setFilterAndProjectMinOutputPageSize(DataSize.of(1, MEGABYTE))
@@ -129,9 +131,11 @@ public class TestFeaturesConfig
                 .setOmitDateTimeTypePrecision(true)
                 .setLegacyCatalogRoles(true)
                 .setIncrementalHashArrayLoadFactorEnabled(false)
+                .setLegacyMaterializedViewGracePeriod(true)
                 .setHideInaccessibleColumns(true)
                 .setAllowSetViewAuthorization(true)
-                .setForceSpillingJoin(true);
+                .setForceSpillingJoin(true)
+                .setFaultTolerantExecutionExchangeEncryptionEnabled(false);
         assertFullMapping(properties, expected);
     }
 }

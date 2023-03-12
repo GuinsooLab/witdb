@@ -32,9 +32,6 @@ import io.trino.SystemSessionProperties;
 import io.trino.SystemSessionPropertiesProvider;
 import io.trino.block.BlockJsonSerde;
 import io.trino.client.NodeVersion;
-import io.trino.connector.CatalogServiceProviderModule;
-import io.trino.connector.ConnectorManager;
-import io.trino.connector.ConnectorServicesProvider;
 import io.trino.connector.system.SystemConnectorModule;
 import io.trino.dispatcher.DispatchManager;
 import io.trino.event.SplitMonitor;
@@ -64,7 +61,6 @@ import io.trino.memory.MemoryManagerConfig;
 import io.trino.memory.MemoryResource;
 import io.trino.memory.NodeMemoryConfig;
 import io.trino.metadata.BlockEncodingManager;
-import io.trino.metadata.CatalogManager;
 import io.trino.metadata.DisabledSystemSecurityMetadata;
 import io.trino.metadata.DiscoveryNodeManager;
 import io.trino.metadata.ForNodeManager;
@@ -79,8 +75,6 @@ import io.trino.metadata.LiteralFunction;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.MetadataManager;
 import io.trino.metadata.ProcedureRegistry;
-import io.trino.metadata.StaticCatalogStore;
-import io.trino.metadata.StaticCatalogStoreConfig;
 import io.trino.metadata.SystemFunctionBundle;
 import io.trino.metadata.SystemSecurityMetadata;
 import io.trino.metadata.TableFunctionRegistry;
@@ -94,6 +88,7 @@ import io.trino.operator.GroupByHashPageIndexerFactory;
 import io.trino.operator.OperatorFactories;
 import io.trino.operator.PagesIndex;
 import io.trino.operator.PagesIndexPageSorter;
+import io.trino.operator.RetryPolicy;
 import io.trino.operator.TrinoOperatorFactories;
 import io.trino.operator.index.IndexJoinLookupStats;
 import io.trino.operator.scalar.json.JsonExistsFunction;
@@ -131,6 +126,7 @@ import io.trino.split.PageSourceProvider;
 import io.trino.split.SplitManager;
 import io.trino.sql.PlannerContext;
 import io.trino.sql.SqlEnvironmentConfig;
+import io.trino.sql.analyzer.SessionTimeProvider;
 import io.trino.sql.analyzer.StatementAnalyzerFactory;
 import io.trino.sql.gen.ExpressionCompiler;
 import io.trino.sql.gen.JoinCompiler;
@@ -179,6 +175,7 @@ import static io.airlift.json.JsonCodecBinder.jsonCodecBinder;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.trino.execution.scheduler.NodeSchedulerConfig.NodeSchedulerPolicy.TOPOLOGY;
 import static io.trino.execution.scheduler.NodeSchedulerConfig.NodeSchedulerPolicy.UNIFORM;
+import static io.trino.operator.RetryPolicy.TASK;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
@@ -217,7 +214,17 @@ public class ServerMainModule
         binder.bind(HttpRequestSessionContextFactory.class).in(Scopes.SINGLETON);
         install(new InternalCommunicationModule());
 
+        QueryManagerConfig queryManagerConfig = buildConfigObject(QueryManagerConfig.class);
+        RetryPolicy retryPolicy = queryManagerConfig.getRetryPolicy();
+        if (retryPolicy == TASK) {
+            configBinder(binder).bindConfigDefaults(QueryManagerConfig.class, QueryManagerConfig::applyFaultTolerantExecutionDefaults);
+        }
+
         configBinder(binder).bindConfig(FeaturesConfig.class);
+        if (retryPolicy == TASK) {
+            configBinder(binder).bindConfigDefaults(FeaturesConfig.class, FeaturesConfig::applyFaultTolerantExecutionDefaults);
+        }
+
         configBinder(binder).bindConfig(OptimizerConfig.class);
         configBinder(binder).bindConfig(ProtocolConfig.class);
 
@@ -225,12 +232,12 @@ public class ServerMainModule
 
         jaxrsBinder(binder).bind(ThrowableMapper.class);
 
-        configBinder(binder).bindConfig(QueryManagerConfig.class);
-
         configBinder(binder).bindConfig(SqlEnvironmentConfig.class);
 
         newOptionalBinder(binder, ExplainAnalyzeContext.class);
         binder.bind(StatementAnalyzerFactory.class).in(Scopes.SINGLETON);
+        newOptionalBinder(binder, SessionTimeProvider.class)
+                .setDefault().toInstance(SessionTimeProvider.DEFAULT);
 
         // GC Monitor
         binder.bind(GcMonitor.class).to(JmxGcMonitor.class).in(Scopes.SINGLETON);
@@ -290,6 +297,10 @@ public class ServerMainModule
         newExporter(binder).export(PauseMeter.class).withGeneratedName();
 
         configBinder(binder).bindConfig(MemoryManagerConfig.class);
+        if (retryPolicy == TASK) {
+            configBinder(binder).bindConfigDefaults(MemoryManagerConfig.class, MemoryManagerConfig::applyFaultTolerantExecutionDefaults);
+        }
+
         configBinder(binder).bindConfig(NodeMemoryConfig.class);
         binder.bind(LocalMemoryManager.class).in(Scopes.SINGLETON);
         binder.bind(LocalMemoryManagerExporter.class).in(Scopes.SINGLETON);
@@ -306,6 +317,9 @@ public class ServerMainModule
         binder.bind(PageFunctionCompiler.class).in(Scopes.SINGLETON);
         newExporter(binder).export(PageFunctionCompiler.class).withGeneratedName();
         configBinder(binder).bindConfig(TaskManagerConfig.class);
+        if (retryPolicy == TASK) {
+            configBinder(binder).bindConfigDefaults(TaskManagerConfig.class, TaskManagerConfig::applyFaultTolerantExecutionDefaults);
+        }
         binder.bind(IndexJoinLookupStats.class).in(Scopes.SINGLETON);
         newExporter(binder).export(IndexJoinLookupStats.class).withGeneratedName();
         binder.bind(AsyncHttpExecutionMBean.class).in(Scopes.SINGLETON);
@@ -353,8 +367,6 @@ public class ServerMainModule
         binder.bind(PageSinkProvider.class).to(PageSinkManager.class).in(Scopes.SINGLETON);
 
         // metadata
-        binder.bind(StaticCatalogStore.class).in(Scopes.SINGLETON);
-        configBinder(binder).bindConfig(StaticCatalogStoreConfig.class);
         binder.bind(MetadataManager.class).in(Scopes.SINGLETON);
         binder.bind(Metadata.class).to(MetadataManager.class).in(Scopes.SINGLETON);
         newOptionalBinder(binder, SystemSecurityMetadata.class)
@@ -398,11 +410,6 @@ public class ServerMainModule
         // handle resolver
         binder.install(new HandleJsonModule());
 
-        // connector
-        binder.bind(ConnectorManager.class).in(Scopes.SINGLETON);
-        binder.bind(ConnectorServicesProvider.class).to(ConnectorManager.class).in(Scopes.SINGLETON);
-        binder.install(new CatalogServiceProviderModule());
-
         // system connector
         binder.install(new SystemConnectorModule());
 
@@ -430,12 +437,11 @@ public class ServerMainModule
         jaxrsBinder(binder).bind(StatusResource.class);
 
         // plugin manager
-        binder.bind(PluginManager.class).in(Scopes.SINGLETON);
+        newOptionalBinder(binder, PluginInstaller.class).setDefault()
+                .to(PluginManager.class).in(Scopes.SINGLETON);
         newOptionalBinder(binder, PluginsProvider.class).setDefault()
                 .to(ServerPluginsProvider.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(ServerPluginsProviderConfig.class);
-
-        binder.bind(CatalogManager.class).in(Scopes.SINGLETON);
 
         // block encodings
         binder.bind(BlockEncodingManager.class).in(Scopes.SINGLETON);

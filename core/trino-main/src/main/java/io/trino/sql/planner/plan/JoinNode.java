@@ -23,6 +23,7 @@ import io.trino.sql.planner.Symbol;
 import io.trino.sql.tree.ComparisonExpression;
 import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.Join;
+import io.trino.sql.tree.NullLiteral;
 
 import javax.annotation.concurrent.Immutable;
 
@@ -46,6 +47,42 @@ import static java.util.Objects.requireNonNull;
 public class JoinNode
         extends PlanNode
 {
+    public enum DistributionType
+    {
+        PARTITIONED,
+        REPLICATED
+    }
+
+    public enum Type
+    {
+        INNER("InnerJoin"),
+        LEFT("LeftJoin"),
+        RIGHT("RightJoin"),
+        FULL("FullJoin");
+
+        private final String joinLabel;
+
+        Type(String joinLabel)
+        {
+            this.joinLabel = joinLabel;
+        }
+
+        public String getJoinLabel()
+        {
+            return joinLabel;
+        }
+
+        public static Type typeConvert(Join.Type joinType)
+        {
+            return switch (joinType) {
+                case CROSS, IMPLICIT, INNER -> Type.INNER;
+                case LEFT -> Type.LEFT;
+                case RIGHT -> Type.RIGHT;
+                case FULL -> Type.FULL;
+            };
+        }
+    }
+
     private final Type type;
     private final PlanNode left;
     private final PlanNode right;
@@ -89,6 +126,9 @@ public class JoinNode
         requireNonNull(leftOutputSymbols, "leftOutputSymbols is null");
         requireNonNull(rightOutputSymbols, "rightOutputSymbols is null");
         requireNonNull(filter, "filter is null");
+        // The condition doesn't guarantee that filter is of type boolean, but was found to be a practical way to identify
+        // places where JoinNode could be created without appropriate coercions.
+        checkArgument(filter.isEmpty() || !(filter.get() instanceof NullLiteral), "Filter must be an expression of boolean type: %s", filter);
         requireNonNull(leftHashSymbol, "leftHashSymbol is null");
         requireNonNull(rightHashSymbol, "rightHashSymbol is null");
         requireNonNull(distributionType, "distributionType is null");
@@ -160,17 +200,12 @@ public class JoinNode
 
     private static Type flipType(Type type)
     {
-        switch (type) {
-            case INNER:
-                return INNER;
-            case FULL:
-                return FULL;
-            case LEFT:
-                return RIGHT;
-            case RIGHT:
-                return LEFT;
-        }
-        throw new IllegalStateException("No inverse defined for join type: " + type);
+        return switch (type) {
+            case INNER -> INNER;
+            case FULL -> FULL;
+            case LEFT -> RIGHT;
+            case RIGHT -> LEFT;
+        };
     }
 
     private static List<EquiJoinClause> flipJoinCriteria(List<EquiJoinClause> joinCriteria)
@@ -178,49 +213,6 @@ public class JoinNode
         return joinCriteria.stream()
                 .map(EquiJoinClause::flip)
                 .collect(toImmutableList());
-    }
-
-    public enum DistributionType
-    {
-        PARTITIONED,
-        REPLICATED
-    }
-
-    public enum Type
-    {
-        INNER("InnerJoin"),
-        LEFT("LeftJoin"),
-        RIGHT("RightJoin"),
-        FULL("FullJoin");
-
-        private final String joinLabel;
-
-        Type(String joinLabel)
-        {
-            this.joinLabel = joinLabel;
-        }
-
-        public String getJoinLabel()
-        {
-            return joinLabel;
-        }
-
-        public static Type typeConvert(Join.Type joinType)
-        {
-            switch (joinType) {
-                case CROSS:
-                case IMPLICIT:
-                case INNER:
-                    return Type.INNER;
-                case LEFT:
-                    return Type.LEFT;
-                case RIGHT:
-                    return Type.RIGHT;
-                case FULL:
-                    return Type.FULL;
-            }
-            throw new UnsupportedOperationException("Unsupported join type: " + joinType);
-        }
     }
 
     @JsonProperty("type")
@@ -353,6 +345,11 @@ public class JoinNode
     public JoinNode withReorderJoinStatsAndCost(PlanNodeStatsAndCostSummary statsAndCost)
     {
         return new JoinNode(getId(), type, left, right, criteria, leftOutputSymbols, rightOutputSymbols, maySkipOutputDuplicates, filter, leftHashSymbol, rightHashSymbol, distributionType, spillable, dynamicFilters, Optional.of(statsAndCost));
+    }
+
+    public JoinNode withoutDynamicFilters()
+    {
+        return new JoinNode(getId(), type, left, right, criteria, leftOutputSymbols, rightOutputSymbols, maySkipOutputDuplicates, filter, leftHashSymbol, rightHashSymbol, distributionType, spillable, ImmutableMap.of(), reorderJoinStatsAndCost);
     }
 
     public boolean isCrossJoin()

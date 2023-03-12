@@ -250,9 +250,11 @@ public class TestStageStateMachine
                         ImmutableList.of(new Row(ImmutableList.of(new StringLiteral("foo"))))),
                 ImmutableMap.of(symbol, VARCHAR),
                 SOURCE_DISTRIBUTION,
+                Optional.empty(),
                 ImmutableList.of(valuesNodeId),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
                 StatsAndCosts.empty(),
+                ImmutableList.of(),
                 Optional.empty());
 
         return planFragment;

@@ -41,7 +41,6 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.trino.SystemSessionProperties.ENABLE_DYNAMIC_FILTERING;
-import static io.trino.SystemSessionProperties.FORCE_SINGLE_NODE_OUTPUT;
 import static io.trino.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static io.trino.SystemSessionProperties.JOIN_REORDERING_STRATEGY;
 import static io.trino.metadata.AbstractMockMetadata.dummyMetadata;
@@ -51,10 +50,10 @@ import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.SmallintType.SMALLINT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.planner.plan.JoinNode.Type.INNER;
-import static io.trino.testing.assertions.Assert.assertEquals;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
@@ -64,7 +63,6 @@ public class TestLocalDynamicFilterConsumer
     public TestLocalDynamicFilterConsumer()
     {
         super(ImmutableMap.of(
-                FORCE_SINGLE_NODE_OUTPUT, "false",
                 ENABLE_DYNAMIC_FILTERING, "true",
                 JOIN_REORDERING_STRATEGY, JoinReorderingStrategy.NONE.name(),
                 JOIN_DISTRIBUTION_TYPE, JoinDistributionType.BROADCAST.name()));

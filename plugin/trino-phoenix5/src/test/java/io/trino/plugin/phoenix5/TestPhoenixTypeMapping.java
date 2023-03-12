@@ -29,7 +29,6 @@ import io.trino.testing.datatype.SqlDataTypeTest;
 import io.trino.testing.sql.TestTable;
 import io.trino.testing.sql.TrinoSqlExecutor;
 import org.intellij.lang.annotations.Language;
-import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -104,14 +103,8 @@ public class TestPhoenixTypeMapping
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        phoenixServer = TestingPhoenixServer.getInstance();
+        phoenixServer = closeAfterClass(TestingPhoenixServer.getInstance()).get();
         return createPhoenixQueryRunner(phoenixServer, ImmutableMap.of(), ImmutableList.of());
-    }
-
-    @AfterClass(alwaysRun = true)
-    public void destroy()
-    {
-        TestingPhoenixServer.shutDown();
     }
 
     @Test
@@ -720,7 +713,7 @@ public class TestPhoenixTypeMapping
                 // using two non-JVM zones so that we don't need to worry what Phoenix system zone is
                 {vilnius},
                 {kathmandu},
-                {ZoneId.of(TestingSession.DEFAULT_TIME_ZONE_KEY.getId())},
+                {TestingSession.DEFAULT_TIME_ZONE_KEY.getZoneId()},
         };
     }
 

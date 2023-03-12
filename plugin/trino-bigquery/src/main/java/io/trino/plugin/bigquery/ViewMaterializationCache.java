@@ -53,7 +53,6 @@ public class ViewMaterializationCache
     @Inject
     public ViewMaterializationCache(BigQueryConfig config)
     {
-        requireNonNull(config, "config is null");
         this.destinationTableCache = buildNonEvictableCache(
                 CacheBuilder.newBuilder()
                         .expireAfterWrite(config.getViewsCacheTtl().toMillis(), MILLISECONDS)
@@ -69,8 +68,8 @@ public class ViewMaterializationCache
 
     private TableId createDestinationTable(TableId remoteTableId)
     {
-        String project = viewMaterializationProject.orElse(remoteTableId.getProject());
-        String dataset = viewMaterializationDataset.orElse(remoteTableId.getDataset());
+        String project = viewMaterializationProject.orElseGet(remoteTableId::getProject);
+        String dataset = viewMaterializationDataset.orElseGet(remoteTableId::getDataset);
 
         String name = format("_pbc_%s", randomUUID().toString().toLowerCase(ENGLISH).replace("-", ""));
         return TableId.of(project, dataset, name);

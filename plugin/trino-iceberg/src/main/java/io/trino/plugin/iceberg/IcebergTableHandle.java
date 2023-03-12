@@ -33,6 +33,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
 
 public class IcebergTableHandle
         implements ConnectorTableHandle
@@ -42,7 +43,9 @@ public class IcebergTableHandle
     private final TableType tableType;
     private final Optional<Long> snapshotId;
     private final String tableSchemaJson;
-    private final String partitionSpecJson;
+    private final List<TrinoSortField> sortOrder;
+    // Empty means the partitioning spec is not known (can be the case for certain time travel queries).
+    private final Optional<String> partitionSpecJson;
     private final int formatVersion;
     private final String tableLocation;
     private final Map<String, String> storageProperties;
@@ -71,7 +74,8 @@ public class IcebergTableHandle
             @JsonProperty("tableType") TableType tableType,
             @JsonProperty("snapshotId") Optional<Long> snapshotId,
             @JsonProperty("tableSchemaJson") String tableSchemaJson,
-            @JsonProperty("partitionSpecJson") String partitionSpecJson,
+            @JsonProperty("sortOrder") List<TrinoSortField> sortOrder,
+            @JsonProperty("partitionSpecJson") Optional<String> partitionSpecJson,
             @JsonProperty("formatVersion") int formatVersion,
             @JsonProperty("unenforcedPredicate") TupleDomain<IcebergColumnHandle> unenforcedPredicate,
             @JsonProperty("enforcedPredicate") TupleDomain<IcebergColumnHandle> enforcedPredicate,
@@ -88,6 +92,7 @@ public class IcebergTableHandle
                 tableType,
                 snapshotId,
                 tableSchemaJson,
+                sortOrder,
                 partitionSpecJson,
                 formatVersion,
                 unenforcedPredicate,
@@ -108,7 +113,8 @@ public class IcebergTableHandle
             TableType tableType,
             Optional<Long> snapshotId,
             String tableSchemaJson,
-            String partitionSpecJson,
+            List<TrinoSortField> sortOrder,
+            Optional<String> partitionSpecJson,
             int formatVersion,
             TupleDomain<IcebergColumnHandle> unenforcedPredicate,
             TupleDomain<IcebergColumnHandle> enforcedPredicate,
@@ -126,6 +132,7 @@ public class IcebergTableHandle
         this.tableType = requireNonNull(tableType, "tableType is null");
         this.snapshotId = requireNonNull(snapshotId, "snapshotId is null");
         this.tableSchemaJson = requireNonNull(tableSchemaJson, "schemaJson is null");
+        this.sortOrder = ImmutableList.copyOf(requireNonNull(sortOrder, "sortOrder is null"));
         this.partitionSpecJson = requireNonNull(partitionSpecJson, "partitionSpecJson is null");
         this.formatVersion = formatVersion;
         this.unenforcedPredicate = requireNonNull(unenforcedPredicate, "unenforcedPredicate is null");
@@ -158,6 +165,7 @@ public class IcebergTableHandle
         return tableType;
     }
 
+    // Empty only when reading from a table that has no snapshots yet.
     @JsonProperty
     public Optional<Long> getSnapshotId()
     {
@@ -171,7 +179,13 @@ public class IcebergTableHandle
     }
 
     @JsonProperty
-    public String getPartitionSpecJson()
+    public List<TrinoSortField> getSortOrder()
+    {
+        return sortOrder;
+    }
+
+    @JsonProperty
+    public Optional<String> getPartitionSpecJson()
     {
         return partitionSpecJson;
     }
@@ -260,6 +274,7 @@ public class IcebergTableHandle
                 tableType,
                 snapshotId,
                 tableSchemaJson,
+                sortOrder,
                 partitionSpecJson,
                 formatVersion,
                 unenforcedPredicate,
@@ -282,6 +297,7 @@ public class IcebergTableHandle
                 tableType,
                 snapshotId,
                 tableSchemaJson,
+                sortOrder,
                 partitionSpecJson,
                 formatVersion,
                 unenforcedPredicate,
@@ -304,6 +320,7 @@ public class IcebergTableHandle
                 tableType,
                 snapshotId,
                 tableSchemaJson,
+                sortOrder,
                 partitionSpecJson,
                 formatVersion,
                 unenforcedPredicate,
@@ -326,6 +343,7 @@ public class IcebergTableHandle
                 tableType,
                 snapshotId,
                 tableSchemaJson,
+                sortOrder,
                 partitionSpecJson,
                 formatVersion,
                 unenforcedPredicate,
@@ -357,6 +375,7 @@ public class IcebergTableHandle
                 tableType == that.tableType &&
                 Objects.equals(snapshotId, that.snapshotId) &&
                 Objects.equals(tableSchemaJson, that.tableSchemaJson) &&
+                Objects.equals(sortOrder, that.sortOrder) &&
                 Objects.equals(partitionSpecJson, that.partitionSpecJson) &&
                 formatVersion == that.formatVersion &&
                 Objects.equals(unenforcedPredicate, that.unenforcedPredicate) &&
@@ -373,13 +392,24 @@ public class IcebergTableHandle
     @Override
     public int hashCode()
     {
-        return Objects.hash(schemaName, tableName, tableType, snapshotId, tableSchemaJson, partitionSpecJson, formatVersion, unenforcedPredicate, enforcedPredicate,
+        return Objects.hash(schemaName, tableName, tableType, snapshotId, tableSchemaJson, sortOrder, partitionSpecJson, formatVersion, unenforcedPredicate, enforcedPredicate,
                 projectedColumns, nameMappingJson, tableLocation, storageProperties, retryMode, updatedColumns, recordScannedFiles, maxScannedFileSize);
     }
 
     @Override
     public String toString()
     {
-        return getSchemaTableNameWithType() + snapshotId.map(v -> "@" + v).orElse("");
+        StringBuilder builder = new StringBuilder(getSchemaTableNameWithType().toString());
+        snapshotId.ifPresent(snapshotId -> builder.append("@").append(snapshotId));
+        if (enforcedPredicate.isNone()) {
+            builder.append(" constraint=FALSE");
+        }
+        else if (!enforcedPredicate.isAll()) {
+            builder.append(" constraint on ");
+            builder.append(enforcedPredicate.getDomains().orElseThrow().keySet().stream()
+                    .map(IcebergColumnHandle::getQualifiedName)
+                    .collect(joining(", ", "[", "]")));
+        }
+        return builder.toString();
     }
 }

@@ -97,6 +97,7 @@ import static com.google.common.net.HttpHeaders.AUTHORIZATION;
 import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.jaxrs.JaxrsBinder.jaxrsBinder;
+import static io.jsonwebtoken.Claims.AUDIENCE;
 import static io.jsonwebtoken.security.Keys.hmacShaKeyFor;
 import static io.trino.client.OkHttpUtil.setupSsl;
 import static io.trino.client.ProtocolHeaders.TRINO_HEADERS;
@@ -110,7 +111,6 @@ import static io.trino.server.ui.FormWebUiAuthenticationFilter.UI_LOCATION;
 import static io.trino.server.ui.OAuthWebUiCookie.OAUTH2_COOKIE;
 import static io.trino.spi.security.AccessDeniedException.denyImpersonateUser;
 import static io.trino.spi.security.AccessDeniedException.denyReadSystemInformationAccess;
-import static io.trino.testing.assertions.Assert.assertEquals;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.Instant.now;
@@ -124,6 +124,7 @@ import static javax.ws.rs.core.HttpHeaders.LOCATION;
 import static javax.ws.rs.core.HttpHeaders.SET_COOKIE;
 import static javax.ws.rs.core.HttpHeaders.WWW_AUTHENTICATE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 
@@ -148,6 +149,9 @@ public class TestResourceSecurity
     private static final String HMAC_KEY = Resources.getResource("hmac_key.txt").getPath();
     private static final String JWK_KEY_ID = "test-rsa";
     private static final String GROUPS_CLAIM = "groups";
+    private static final String TRINO_AUDIENCE = "trino-client";
+    private static final String ADDITIONAL_AUDIENCE = "https://external-service.com";
+    private static final String UNTRUSTED_CLIENT_AUDIENCE = "https://untrusted.com";
     private static final PrivateKey JWK_PRIVATE_KEY;
     private static final PublicKey JWK_PUBLIC_KEY;
     private static final ObjectMapper json = new ObjectMapper();
@@ -191,9 +195,7 @@ public class TestResourceSecurity
             throws Exception
     {
         try (TestingTrinoServer server = TestingTrinoServer.builder()
-                .setProperties(ImmutableMap.<String, String>builder()
-                        .put("http-server.authentication.insecure.user-mapping.pattern", ALLOWED_USER_MAPPING_PATTERN)
-                        .buildOrThrow())
+                .setProperties(ImmutableMap.of("http-server.authentication.insecure.user-mapping.pattern", ALLOWED_USER_MAPPING_PATTERN))
                 .build()) {
             server.getInstance(Key.get(AccessControlManager.class)).addSystemAccessControl(TestSystemAccessControl.WITH_IMPERSONATION);
             HttpServerInfo httpServerInfo = server.getInstance(Key.get(HttpServerInfo.class));
@@ -292,7 +294,8 @@ public class TestResourceSecurity
                     .headers(Headers.of("Authorization", Credentials.basic(TEST_USER_LOGIN, "wrong_password")))
                     .build();
             try (Response response = client.newCall(request).execute()) {
-                assertThat(response.message()).isEqualTo("Access Denied: Invalid credentials | Access Denied: Invalid credentials2");
+                assertThat(requireNonNull(response.body()).string())
+                        .isEqualTo("Access Denied: Invalid credentials | Access Denied: Invalid credentials2");
             }
         }
     }
@@ -460,11 +463,13 @@ public class TestResourceSecurity
     public void testJwtAuthenticator()
             throws Exception
     {
-        verifyJwtAuthenticator(Optional.empty());
-        verifyJwtAuthenticator(Optional.of("custom-principal"));
+        verifyJwtAuthenticator(Optional.empty(), Optional.empty());
+        verifyJwtAuthenticator(Optional.of("custom-principal"), Optional.empty());
+        verifyJwtAuthenticator(Optional.empty(), Optional.of(TRINO_AUDIENCE));
+        verifyJwtAuthenticator(Optional.empty(), Optional.of(ImmutableList.of(TRINO_AUDIENCE, ADDITIONAL_AUDIENCE)));
     }
 
-    private void verifyJwtAuthenticator(Optional<String> principalField)
+    private void verifyJwtAuthenticator(Optional<String> principalField, Optional<Object> audience)
             throws Exception
     {
         try (TestingTrinoServer server = TestingTrinoServer.builder()
@@ -473,6 +478,7 @@ public class TestResourceSecurity
                         .put("http-server.authentication.type", "jwt")
                         .put("http-server.authentication.jwt.key-file", HMAC_KEY)
                         .put("http-server.authentication.jwt.principal-field", principalField.orElse("sub"))
+                        .put("http-server.authentication.jwt.required-audience", TRINO_AUDIENCE)
                         .buildOrThrow())
                 .build()) {
             server.getInstance(Key.get(AccessControlManager.class)).addSystemAccessControl(TestSystemAccessControl.NO_IMPERSONATION);
@@ -485,10 +491,17 @@ public class TestResourceSecurity
                     .signWith(hmac)
                     .setExpiration(Date.from(ZonedDateTime.now().plusMinutes(5).toInstant()));
             if (principalField.isPresent()) {
-                tokenBuilder.claim(principalField.get(), "test-user");
+                tokenBuilder.claim(principalField.get(), TEST_USER);
             }
             else {
-                tokenBuilder.setSubject("test-user");
+                tokenBuilder.setSubject(TEST_USER);
+            }
+
+            if (audience.isPresent()) {
+                tokenBuilder.claim(AUDIENCE, audience.get());
+            }
+            else {
+                tokenBuilder.setAudience(TRINO_AUDIENCE);
             }
             String token = tokenBuilder.compact();
 
@@ -535,6 +548,78 @@ public class TestResourceSecurity
         }
         finally {
             jwkServer.stop();
+        }
+    }
+
+    @Test
+    public void testJwtAuthenticatorWithInvalidAudience()
+            throws Exception
+    {
+        try (TestingTrinoServer server = TestingTrinoServer.builder()
+                .setProperties(ImmutableMap.<String, String>builder()
+                        .putAll(SECURE_PROPERTIES)
+                        .put("http-server.authentication.type", "jwt")
+                        .put("http-server.authentication.jwt.key-file", HMAC_KEY)
+                        .put("http-server.authentication.jwt.required-audience", TRINO_AUDIENCE)
+                        .buildOrThrow())
+                .build()) {
+            server.getInstance(Key.get(AccessControlManager.class)).addSystemAccessControl(TestSystemAccessControl.NO_IMPERSONATION);
+            HttpServerInfo httpServerInfo = server.getInstance(Key.get(HttpServerInfo.class));
+
+            SecretKey hmac = hmacShaKeyFor(Base64.getDecoder().decode(Files.readString(Paths.get(HMAC_KEY)).trim()));
+            JwtBuilder tokenBuilder = newJwtBuilder()
+                    .signWith(hmac)
+                    .setExpiration(Date.from(ZonedDateTime.now().plusMinutes(5).toInstant()))
+                    .claim(AUDIENCE, ImmutableList.of(ADDITIONAL_AUDIENCE, UNTRUSTED_CLIENT_AUDIENCE));
+            String token = tokenBuilder.compact();
+
+            OkHttpClient clientWithJwt = this.client.newBuilder()
+                    .build();
+            assertResponseCode(clientWithJwt, getAuthorizedUserLocation(httpServerInfo.getHttpsUri()), SC_UNAUTHORIZED, Headers.of(AUTHORIZATION, "Bearer " + token));
+        }
+    }
+
+    @Test
+    public void testJwtAuthenticatorWithNoRequiredAudience()
+            throws Exception
+    {
+        verifyJwtAuthenticatorWithoutRequiredAudience(Optional.empty());
+        verifyJwtAuthenticatorWithoutRequiredAudience(Optional.of(ImmutableList.of(TRINO_AUDIENCE, ADDITIONAL_AUDIENCE)));
+    }
+
+    private void verifyJwtAuthenticatorWithoutRequiredAudience(Optional<Object> audience)
+            throws Exception
+    {
+        try (TestingTrinoServer server = TestingTrinoServer.builder()
+                .setProperties(ImmutableMap.<String, String>builder()
+                        .putAll(SECURE_PROPERTIES)
+                        .put("http-server.authentication.type", "jwt")
+                        .put("http-server.authentication.jwt.key-file", HMAC_KEY)
+                        .buildOrThrow())
+                .build()) {
+            server.getInstance(Key.get(AccessControlManager.class)).addSystemAccessControl(TestSystemAccessControl.NO_IMPERSONATION);
+            HttpServerInfo httpServerInfo = server.getInstance(Key.get(HttpServerInfo.class));
+
+            assertAuthenticationDisabled(httpServerInfo.getHttpUri());
+
+            SecretKey hmac = hmacShaKeyFor(Base64.getDecoder().decode(Files.readString(Paths.get(HMAC_KEY)).trim()));
+            JwtBuilder tokenBuilder = newJwtBuilder()
+                    .signWith(hmac)
+                    .setExpiration(Date.from(ZonedDateTime.now().plusMinutes(5).toInstant()))
+                    .setSubject(TEST_USER);
+
+            if (audience.isPresent()) {
+                tokenBuilder.claim(AUDIENCE, audience.get());
+            }
+
+            String token = tokenBuilder.compact();
+
+            OkHttpClient clientWithJwt = client.newBuilder()
+                    .authenticator((route, response) -> response.request().newBuilder()
+                            .header(AUTHORIZATION, "Bearer " + token)
+                            .build())
+                    .build();
+            assertAuthenticationAutomatic(httpServerInfo.getHttpsUri(), clientWithJwt);
         }
     }
 
@@ -699,7 +784,7 @@ public class TestResourceSecurity
                                 .put("web-ui.enabled", "true")
                                 .put("http-server.authentication.type", "oauth2")
                                 .putAll(getOAuth2Properties(tokenServer))
-                                .put("http-server.authentication.oauth2.groups-field", GROUPS_CLAIM)
+                                .put("deprecated.http-server.authentication.oauth2.groups-field", GROUPS_CLAIM)
                                 .buildOrThrow())
                         .setAdditionalModule(oauth2Module(tokenServer))
                         .build()) {
@@ -799,6 +884,48 @@ public class TestResourceSecurity
                     .build();
 
             assertAuthenticationAutomatic(httpServerInfo.getHttpsUri(), clientWithOAuthToken);
+
+            String token = newJwtBuilder()
+                    .signWith(JWK_PRIVATE_KEY)
+                    .setHeaderParam(JwsHeader.KEY_ID, JWK_KEY_ID)
+                    .setSubject("test-user")
+                    .setExpiration(Date.from(ZonedDateTime.now().plusMinutes(5).toInstant()))
+                    .compact();
+
+            OkHttpClient clientWithJwt = client.newBuilder()
+                    .authenticator((route, response) -> response.request().newBuilder()
+                            .header(AUTHORIZATION, "Bearer " + token)
+                            .build())
+                    .build();
+            assertAuthenticationAutomatic(httpServerInfo.getHttpsUri(), clientWithJwt);
+        }
+    }
+
+    @Test
+    public void testJwtWithRefreshTokensForOAuth2Enabled()
+            throws Exception
+    {
+        TestingHttpServer jwkServer = createTestingJwkServer();
+        jwkServer.start();
+        try (TokenServer tokenServer = new TokenServer(Optional.empty());
+                TestingTrinoServer server = TestingTrinoServer.builder()
+                        .setProperties(
+                                ImmutableMap.<String, String>builder()
+                                        .putAll(SECURE_PROPERTIES)
+                                        .put("http-server.authentication.type", "oauth2,jwt")
+                                        .put("http-server.authentication.jwt.key-file", jwkServer.getBaseUrl().toString())
+                                        .putAll(ImmutableMap.<String, String>builder()
+                                                .putAll(getOAuth2Properties(tokenServer))
+                                                .put("http-server.authentication.oauth2.refresh-tokens", "true")
+                                                .buildOrThrow())
+                                        .put("web-ui.enabled", "true")
+                                        .buildOrThrow())
+                        .setAdditionalModule(oauth2Module(tokenServer))
+                        .build()) {
+            server.getInstance(Key.get(AccessControlManager.class)).addSystemAccessControl(TestSystemAccessControl.NO_IMPERSONATION);
+            HttpServerInfo httpServerInfo = server.getInstance(Key.get(HttpServerInfo.class));
+
+            assertAuthenticationDisabled(httpServerInfo.getHttpUri());
 
             String token = newJwtBuilder()
                     .signWith(JWK_PRIVATE_KEY)

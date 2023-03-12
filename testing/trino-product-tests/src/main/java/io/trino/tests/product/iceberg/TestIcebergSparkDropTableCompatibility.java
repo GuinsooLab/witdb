@@ -13,7 +13,6 @@
  */
 package io.trino.tests.product.iceberg;
 
-import com.google.inject.name.Named;
 import io.trino.tempto.BeforeTestWithContext;
 import io.trino.tempto.ProductTest;
 import io.trino.tempto.hadoop.hdfs.HdfsClient;
@@ -29,11 +28,13 @@ import java.net.URISyntaxException;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.tests.product.TestGroups.ICEBERG;
 import static io.trino.tests.product.TestGroups.PROFILE_SPECIFIC_TESTS;
 import static io.trino.tests.product.hive.Engine.SPARK;
 import static io.trino.tests.product.hive.Engine.TRINO;
-import static io.trino.tests.product.hive.util.TemporaryHiveTable.randomTableSuffix;
+import static io.trino.tests.product.iceberg.util.IcebergTestUtils.getTableLocation;
+import static io.trino.tests.product.iceberg.util.IcebergTestUtils.stripNamenodeURI;
 import static io.trino.tests.product.utils.QueryExecutors.onSpark;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
 import static java.lang.String.format;
@@ -44,10 +45,6 @@ import static java.lang.String.format;
 public class TestIcebergSparkDropTableCompatibility
         extends ProductTest
 {
-    @Inject
-    @Named("databases.hive.warehouse_directory_path")
-    private String warehouseDirectory;
-
     @Inject
     private HdfsClient hdfsClient;
 
@@ -73,19 +70,19 @@ public class TestIcebergSparkDropTableCompatibility
     @Test(groups = {ICEBERG, PROFILE_SPECIFIC_TESTS}, dataProvider = "tableCleanupEngineConfigurations")
     public void testCleanupOnDropTable(Engine tableCreatorEngine, Engine tableDropperEngine)
     {
-        String tableName = "test_cleanup_on_drop_table" + randomTableSuffix();
+        String tableName = "test_cleanup_on_drop_table" + randomNameSuffix();
 
         tableCreatorEngine.queryExecutor().executeQuery("CREATE TABLE " + tableName + "(col0 INT, col1 INT)");
         onTrino().executeQuery("INSERT INTO " + tableName + " VALUES (1, 2)");
 
-        String tableDirectory = format("%s/%s", warehouseDirectory, tableName);
+        String tableDirectory = stripNamenodeURI(getTableLocation(tableName));
         assertFileExistence(tableDirectory, true, "The table directory exists after creating the table");
         List<String> dataFilePaths = getDataFilePaths(tableName);
 
-        tableDropperEngine.queryExecutor().executeQuery("DROP TABLE " + tableName);
+        tableDropperEngine.queryExecutor().executeQuery("DROP TABLE " + tableName); // PURGE option is required to remove data since Iceberg 0.14.0, but the statement hangs in Spark
         boolean expectExists = tableDropperEngine == SPARK; // Note: Spark's behavior is Catalog dependent
         assertFileExistence(tableDirectory, expectExists, format("The table directory %s should be removed after dropping the table", tableDirectory));
-        dataFilePaths.forEach(dataFilePath -> assertFileExistence(dataFilePath, false, format("The data file %s removed after dropping the table", dataFilePath)));
+        dataFilePaths.forEach(dataFilePath -> assertFileExistence(dataFilePath, expectExists, format("The data file %s removed after dropping the table", dataFilePath)));
     }
 
     private void assertFileExistence(String path, boolean exists, String description)

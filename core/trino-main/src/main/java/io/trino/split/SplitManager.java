@@ -14,10 +14,11 @@
 package io.trino.split;
 
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.connector.CatalogServiceProvider;
 import io.trino.execution.QueryManagerConfig;
+import io.trino.metadata.TableFunctionHandle;
 import io.trino.metadata.TableHandle;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.ConnectorSplitSource;
@@ -47,13 +48,13 @@ public class SplitManager
             DynamicFilter dynamicFilter,
             Constraint constraint)
     {
-        CatalogName catalogName = table.getCatalogName();
-        ConnectorSplitManager splitManager = splitManagerProvider.getService(catalogName);
+        CatalogHandle catalogHandle = table.getCatalogHandle();
+        ConnectorSplitManager splitManager = splitManagerProvider.getService(catalogHandle);
         if (!isAllowPushdownIntoConnectors(session)) {
             dynamicFilter = DynamicFilter.EMPTY;
         }
 
-        ConnectorSession connectorSession = session.toConnectorSession(catalogName);
+        ConnectorSession connectorSession = session.toConnectorSession(catalogHandle);
 
         ConnectorSplitSource source = splitManager.getSplits(
                 table.getTransaction(),
@@ -62,10 +63,24 @@ public class SplitManager
                 dynamicFilter,
                 constraint);
 
-        SplitSource splitSource = new ConnectorAwareSplitSource(catalogName, source);
+        SplitSource splitSource = new ConnectorAwareSplitSource(catalogHandle, source);
         if (minScheduleSplitBatchSize > 1) {
             splitSource = new BufferingSplitSource(splitSource, minScheduleSplitBatchSize);
         }
         return splitSource;
+    }
+
+    public SplitSource getSplits(Session session, TableFunctionHandle function)
+    {
+        CatalogHandle catalogHandle = function.getCatalogHandle();
+        ConnectorSplitManager splitManager = splitManagerProvider.getService(catalogHandle);
+
+        ConnectorSplitSource source = splitManager.getSplits(
+                function.getTransactionHandle(),
+                session.toConnectorSession(catalogHandle),
+                function.getSchemaFunctionName(),
+                function.getFunctionHandle());
+
+        return new ConnectorAwareSplitSource(catalogHandle, source);
     }
 }

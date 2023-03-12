@@ -49,6 +49,7 @@ import io.trino.execution.QueryExecution;
 import io.trino.execution.QueryExecutionMBean;
 import io.trino.execution.QueryIdGenerator;
 import io.trino.execution.QueryManager;
+import io.trino.execution.QueryManagerConfig;
 import io.trino.execution.QueryPerformanceFetcher;
 import io.trino.execution.QueryPreparer;
 import io.trino.execution.RemoteTaskFactory;
@@ -62,18 +63,16 @@ import io.trino.execution.resourcegroups.LegacyResourceGroupConfigurationManager
 import io.trino.execution.resourcegroups.ResourceGroupManager;
 import io.trino.execution.scheduler.BinPackingNodeAllocatorService;
 import io.trino.execution.scheduler.ConstantPartitionMemoryEstimator;
+import io.trino.execution.scheduler.EventDrivenTaskSourceFactory;
 import io.trino.execution.scheduler.FixedCountNodeAllocatorService;
 import io.trino.execution.scheduler.NodeAllocatorService;
 import io.trino.execution.scheduler.NodeSchedulerConfig;
 import io.trino.execution.scheduler.PartitionMemoryEstimatorFactory;
 import io.trino.execution.scheduler.SplitSchedulerStats;
-import io.trino.execution.scheduler.StageTaskSourceFactory;
 import io.trino.execution.scheduler.TaskDescriptorStorage;
 import io.trino.execution.scheduler.TaskExecutionStats;
-import io.trino.execution.scheduler.TaskSourceFactory;
 import io.trino.execution.scheduler.policy.AllAtOnceExecutionPolicy;
 import io.trino.execution.scheduler.policy.ExecutionPolicy;
-import io.trino.execution.scheduler.policy.LegacyPhasedExecutionPolicy;
 import io.trino.execution.scheduler.policy.PhasedExecutionPolicy;
 import io.trino.failuredetector.FailureDetectorModule;
 import io.trino.memory.ClusterMemoryManager;
@@ -119,11 +118,12 @@ import javax.inject.Singleton;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import static com.google.inject.multibindings.MapBinder.newMapBinder;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
-import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.concurrent.Threads.threadsNamed;
 import static io.airlift.configuration.ConditionalModule.conditionalModule;
@@ -269,8 +269,7 @@ public class CoordinatorModule
 
         // planner
         binder.bind(PlanFragmenter.class).in(Scopes.SINGLETON);
-        newOptionalBinder(binder, PlanOptimizersFactory.class)
-                .setDefault().to(PlanOptimizers.class).in(Scopes.SINGLETON);
+        binder.bind(PlanOptimizersFactory.class).to(PlanOptimizers.class).in(Scopes.SINGLETON);
 
         // Optimizer/Rule Stats exporter
         binder.bind(RuleStatsRecorder.class).in(Scopes.SINGLETON);
@@ -307,8 +306,15 @@ public class CoordinatorModule
                 .toInstance(newSingleThreadScheduledExecutor(threadsNamed("stage-scheduler")));
 
         // query execution
-        binder.bind(ExecutorService.class).annotatedWith(ForQueryExecution.class)
-                .toInstance(newCachedThreadPool(threadsNamed("query-execution-%s")));
+        QueryManagerConfig queryManagerConfig = buildConfigObject(QueryManagerConfig.class);
+        ThreadPoolExecutor queryExecutor = new ThreadPoolExecutor(
+                queryManagerConfig.getQueryExecutorPoolSize(),
+                queryManagerConfig.getQueryExecutorPoolSize(),
+                60, SECONDS,
+                new LinkedBlockingQueue<>(1000),
+                threadsNamed("query-execution-%s"));
+        queryExecutor.allowCoreThreadTimeOut(true);
+        binder.bind(ExecutorService.class).annotatedWith(ForQueryExecution.class).toInstance(queryExecutor);
         binder.bind(QueryExecutionMBean.class).in(Scopes.SINGLETON);
         newExporter(binder).export(QueryExecutionMBean.class)
                 .as(generator -> generator.generatedNameOf(QueryExecution.class));
@@ -317,7 +323,7 @@ public class CoordinatorModule
         binder.bind(SplitSchedulerStats.class).in(Scopes.SINGLETON);
         newExporter(binder).export(SplitSchedulerStats.class).withGeneratedName();
 
-        binder.bind(TaskSourceFactory.class).to(StageTaskSourceFactory.class).in(Scopes.SINGLETON);
+        binder.bind(EventDrivenTaskSourceFactory.class).in(Scopes.SINGLETON);
         binder.bind(TaskDescriptorStorage.class).in(Scopes.SINGLETON);
         newExporter(binder).export(TaskDescriptorStorage.class).withGeneratedName();
 
@@ -326,7 +332,6 @@ public class CoordinatorModule
 
         MapBinder<String, ExecutionPolicy> executionPolicyBinder = newMapBinder(binder, String.class, ExecutionPolicy.class);
         executionPolicyBinder.addBinding("all-at-once").to(AllAtOnceExecutionPolicy.class);
-        executionPolicyBinder.addBinding("legacy-phased").to(LegacyPhasedExecutionPolicy.class);
         executionPolicyBinder.addBinding("phased").to(PhasedExecutionPolicy.class);
 
         install(new QueryExecutionFactoryModule());

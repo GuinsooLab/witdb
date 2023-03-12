@@ -14,6 +14,7 @@
 package io.trino.plugin.hive;
 
 import com.google.common.collect.ImmutableList;
+import io.trino.hdfs.HdfsEnvironment;
 import io.trino.plugin.hive.LocationService.WriteInfo;
 import io.trino.plugin.hive.TestBackgroundHiveSplitLoader.TestingHdfsEnvironment;
 import io.trino.spi.TrinoException;
@@ -102,6 +103,6 @@ public class TestHiveLocationService
 
     private static LocationHandle locationHandle(LocationHandle.WriteMode writeMode, String targetPath, String writePath)
     {
-        return new LocationHandle(new Path(targetPath), new Path(writePath), true, writeMode);
+        return new LocationHandle(new Path(targetPath), new Path(writePath), writeMode);
     }
 }

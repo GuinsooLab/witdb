@@ -14,8 +14,8 @@
 package io.trino.split;
 
 import com.google.common.util.concurrent.ListenableFuture;
-import io.trino.connector.CatalogName;
 import io.trino.metadata.Split;
+import io.trino.spi.connector.CatalogHandle;
 
 import java.io.Closeable;
 import java.util.List;
@@ -26,7 +26,7 @@ import static java.util.Objects.requireNonNull;
 public interface SplitSource
         extends Closeable
 {
-    CatalogName getCatalogName();
+    CatalogHandle getCatalogHandle();
 
     ListenableFuture<SplitBatch> getNextBatch(int maxSize);
 

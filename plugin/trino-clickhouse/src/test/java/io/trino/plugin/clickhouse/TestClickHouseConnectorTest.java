@@ -16,8 +16,6 @@ package io.trino.plugin.clickhouse;
 import com.google.common.collect.ImmutableMap;
 import io.trino.testing.QueryRunner;
 
-import java.util.OptionalInt;
-
 import static io.trino.plugin.clickhouse.ClickHouseQueryRunner.createClickHouseQueryRunner;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -32,9 +30,7 @@ public class TestClickHouseConnectorTest
         return createClickHouseQueryRunner(
                 clickhouseServer,
                 ImmutableMap.of(),
-                ImmutableMap.<String, String>builder()
-                        .put("clickhouse.map-string-as-varchar", "true")
-                        .buildOrThrow(),
+                ImmutableMap.of("clickhouse.map-string-as-varchar", "true"),
                 REQUIRED_TPCH_TABLES);
     }
 
@@ -46,25 +42,10 @@ public class TestClickHouseConnectorTest
     }
 
     @Override
-    public void testCreateTableWithTableComment()
+    public void testCommentTableSpecialCharacter(String comment)
     {
         // Table comment is unsupported in old ClickHouse version
-        assertThatThrownBy(super::testCreateTableWithTableComment)
-                .hasMessageMatching("(?s).* Syntax error: .* COMMENT 'test comment'.*");
-    }
-
-    @Override
-    public void testCreateTableAsSelectWithTableComment()
-    {
-        // Table comment is unsupported in old ClickHouse version
-        assertThatThrownBy(super::testCreateTableAsSelectWithTableComment)
-                .hasMessageMatching("(?s).* Syntax error: .* COMMENT 'test comment'.*");
-    }
-
-    @Override
-    protected OptionalInt maxTableNameLength()
-    {
-        // The numeric value depends on file system
-        return OptionalInt.of(255 - ".sql.tmp".length());
+        assertThatThrownBy(() -> super.testCommentTableSpecialCharacter(comment))
+                .hasMessageMatching("(?s).* Syntax error: .* COMMENT .*");
     }
 }

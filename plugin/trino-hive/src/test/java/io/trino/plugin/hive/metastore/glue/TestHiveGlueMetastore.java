@@ -53,7 +53,7 @@ import io.trino.spi.connector.TableNotFoundException;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.Range;
 import io.trino.spi.predicate.TupleDomain;
-import io.trino.spi.statistics.ColumnStatisticMetadata;
+import io.trino.spi.predicate.ValueSet;
 import io.trino.spi.statistics.ComputedStatistics;
 import io.trino.spi.statistics.TableStatisticType;
 import io.trino.spi.type.BigintType;
@@ -85,12 +85,17 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.plugin.hive.HiveBasicStatistics.createEmptyStatistics;
+import static io.trino.plugin.hive.HiveColumnStatisticType.MAX_VALUE;
+import static io.trino.plugin.hive.HiveColumnStatisticType.MIN_VALUE;
+import static io.trino.plugin.hive.HiveColumnStatisticType.NUMBER_OF_DISTINCT_VALUES;
+import static io.trino.plugin.hive.HiveColumnStatisticType.NUMBER_OF_NON_NULL_VALUES;
 import static io.trino.plugin.hive.HiveStorageFormat.ORC;
 import static io.trino.plugin.hive.HiveStorageFormat.TEXTFILE;
 import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.plugin.hive.acid.AcidTransaction.NO_ACID_TRANSACTION;
 import static io.trino.plugin.hive.metastore.HiveColumnStatistics.createIntegerColumnStatistics;
 import static io.trino.plugin.hive.metastore.glue.AwsSdkUtil.getPaginatedResults;
+import static io.trino.plugin.hive.metastore.glue.GlueClientUtil.createAsyncGlueClient;
 import static io.trino.plugin.hive.metastore.glue.PartitionFilterBuilder.DECIMAL_TYPE;
 import static io.trino.plugin.hive.metastore.glue.PartitionFilterBuilder.decimalOf;
 import static io.trino.plugin.hive.util.HiveUtil.DELTA_LAKE_PROVIDER;
@@ -100,16 +105,15 @@ import static io.trino.plugin.hive.util.HiveUtil.SPARK_TABLE_PROVIDER_KEY;
 import static io.trino.plugin.hive.util.HiveUtil.isDeltaLakeTable;
 import static io.trino.plugin.hive.util.HiveUtil.isIcebergTable;
 import static io.trino.spi.connector.RetryMode.NO_RETRIES;
-import static io.trino.spi.statistics.ColumnStatisticType.MAX_VALUE;
-import static io.trino.spi.statistics.ColumnStatisticType.MIN_VALUE;
-import static io.trino.spi.statistics.ColumnStatisticType.NUMBER_OF_DISTINCT_VALUES;
-import static io.trino.spi.statistics.ColumnStatisticType.NUMBER_OF_NON_NULL_VALUES;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
+import static io.trino.testing.TestingPageSinkId.TESTING_PAGE_SINK_ID;
 import static java.lang.String.format;
 import static java.lang.System.currentTimeMillis;
+import static java.util.Collections.unmodifiableList;
 import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 import static java.util.UUID.randomUUID;
 import static java.util.concurrent.TimeUnit.DAYS;
 import static org.apache.hadoop.hive.common.FileUtils.makePartName;
@@ -134,9 +138,7 @@ public class TestHiveGlueMetastore
     private static final String PARTITION_KEY2 = "part_key_2";
     private static final String TEST_DATABASE_NAME_PREFIX = "test_glue";
 
-    private static final List<ColumnMetadata> CREATE_TABLE_COLUMNS = ImmutableList.<ColumnMetadata>builder()
-            .add(new ColumnMetadata("id", BigintType.BIGINT))
-            .build();
+    private static final List<ColumnMetadata> CREATE_TABLE_COLUMNS = ImmutableList.of(new ColumnMetadata("id", BIGINT));
     private static final List<ColumnMetadata> CREATE_TABLE_COLUMNS_PARTITIONED_VARCHAR = ImmutableList.<ColumnMetadata>builder()
             .addAll(CREATE_TABLE_COLUMNS)
             .add(new ColumnMetadata(PARTITION_KEY, VarcharType.VARCHAR))
@@ -199,6 +201,7 @@ public class TestHiveGlueMetastore
     @BeforeClass(alwaysRun = true)
     @Override
     public void initialize()
+            throws Exception
     {
         super.initialize();
         // uncomment to get extra AWS debug information
@@ -221,13 +224,14 @@ public class TestHiveGlueMetastore
         glueConfig.setAssumeCanonicalPartitionKeys(true);
 
         Executor executor = new BoundedExecutor(this.executor, 10);
+        GlueMetastoreStats stats = new GlueMetastoreStats();
         return new GlueHiveMetastore(
                 HDFS_ENVIRONMENT,
                 glueConfig,
-                DefaultAWSCredentialsProviderChain.getInstance(),
                 executor,
                 new DefaultGlueColumnStatisticsProviderFactory(executor, executor),
-                Optional.empty(),
+                createAsyncGlueClient(glueConfig, DefaultAWSCredentialsProviderChain.getInstance(), Optional.empty(), stats.newRequestMetricsCollector()),
+                stats,
                 new DefaultGlueMetastoreTableFilterProvider(true).get());
     }
 
@@ -273,18 +277,16 @@ public class TestHiveGlueMetastore
 
     @Override
     public void testUpdateTableColumnStatisticsEmptyOptionalFields()
-            throws Exception
     {
-        // this test expect consistency between written and read stats but this is not provided by glue at the moment
+        // this test expects consistency between written and read stats but this is not provided by glue at the moment
         // when writing empty min/max statistics glue will return 0 to the readers
         // in order to avoid incorrect data we skip writes for statistics with min/max = null
     }
 
     @Override
     public void testUpdatePartitionColumnStatisticsEmptyOptionalFields()
-            throws Exception
     {
-        // this test expect consistency between written and read stats but this is not provided by glue at the moment
+        // this test expects consistency between written and read stats but this is not provided by glue at the moment
         // when writing empty min/max statistics glue will return 0 to the readers
         // in order to avoid incorrect data we skip writes for statistics with min/max = null
     }
@@ -831,18 +833,51 @@ public class TestHiveGlueMetastore
     public void testGetPartitionsFilterIsNullWithValue()
             throws Exception
     {
-        TupleDomain<String> isNullFilter = new PartitionFilterBuilder()
-                .addDomain(PARTITION_KEY, Domain.onlyNull(VarcharType.VARCHAR))
-                .build();
         List<String> partitionList = new ArrayList<>();
         partitionList.add("100");
         partitionList.add(null);
+
         doGetPartitionsFilterTest(
                 CREATE_TABLE_COLUMNS_PARTITIONED_VARCHAR,
                 PARTITION_KEY,
                 partitionList,
-                ImmutableList.of(isNullFilter),
+                ImmutableList.of(new PartitionFilterBuilder()
+                        // IS NULL
+                        .addDomain(PARTITION_KEY, Domain.onlyNull(VarcharType.VARCHAR))
+                        .build()),
                 ImmutableList.of(ImmutableList.of(GlueExpressionUtil.NULL_STRING)));
+
+        doGetPartitionsFilterTest(
+                CREATE_TABLE_COLUMNS_PARTITIONED_VARCHAR,
+                PARTITION_KEY,
+                partitionList,
+                ImmutableList.of(new PartitionFilterBuilder()
+                        // IS NULL or is a specific value
+                        .addDomain(PARTITION_KEY, Domain.create(ValueSet.of(VARCHAR, utf8Slice("100")), true))
+                        .build()),
+                ImmutableList.of(ImmutableList.of("100", GlueExpressionUtil.NULL_STRING)));
+    }
+
+    @Test
+    public void testGetPartitionsFilterEqualsOrIsNullWithValue()
+            throws Exception
+    {
+        TupleDomain<String> equalsOrIsNullFilter = new PartitionFilterBuilder()
+                .addStringValues(PARTITION_KEY, "2020-03-01")
+                .addDomain(PARTITION_KEY, Domain.onlyNull(VarcharType.VARCHAR))
+                .build();
+        List<String> partitionList = new ArrayList<>();
+        partitionList.add("2020-01-01");
+        partitionList.add("2020-02-01");
+        partitionList.add("2020-03-01");
+        partitionList.add(null);
+
+        doGetPartitionsFilterTest(
+                CREATE_TABLE_COLUMNS_PARTITIONED_VARCHAR,
+                PARTITION_KEY,
+                partitionList,
+                ImmutableList.of(equalsOrIsNullFilter),
+                ImmutableList.of(ImmutableList.of("2020-03-01", GlueExpressionUtil.NULL_STRING)));
     }
 
     @Test
@@ -923,6 +958,27 @@ public class TestHiveGlueMetastore
     }
 
     @Test
+    public void testGetPartitionsFilterEqualsAndIsNotNull()
+            throws Exception
+    {
+        TupleDomain<String> equalsAndIsNotNullFilter = new PartitionFilterBuilder()
+                .addDomain(PARTITION_KEY, Domain.notNull(VarcharType.VARCHAR))
+                .addBigintValues(PARTITION_KEY2, 300L)
+                .build();
+
+        doGetPartitionsFilterTest(
+                CREATE_TABLE_COLUMNS_PARTITIONED_TWO_KEYS,
+                ImmutableList.of(PARTITION_KEY, PARTITION_KEY2),
+                ImmutableList.of(
+                        PartitionValues.make("2020-01-01", "100"),
+                        PartitionValues.make("2020-02-01", "200"),
+                        PartitionValues.make("2020-03-01", "300"),
+                        PartitionValues.make(null, "300")),
+                ImmutableList.of(equalsAndIsNotNullFilter),
+                ImmutableList.of(ImmutableList.of(PartitionValues.make("2020-03-01", "300"))));
+    }
+
+    @Test
     public void testUpdateStatisticsOnCreate()
     {
         SchemaTableName tableName = temporaryTable("update_statistics_create");
@@ -935,7 +991,7 @@ public class TestHiveGlueMetastore
             ConnectorOutputTableHandle createTableHandle = metadata.beginCreateTable(session, tableMetadata, Optional.empty(), NO_RETRIES);
 
             // write data
-            ConnectorPageSink sink = pageSinkProvider.createPageSink(transaction.getTransactionHandle(), session, createTableHandle);
+            ConnectorPageSink sink = pageSinkProvider.createPageSink(transaction.getTransactionHandle(), session, createTableHandle, TESTING_PAGE_SINK_ID);
             MaterializedResult data = MaterializedResult.resultBuilder(session, BigintType.BIGINT)
                     .row(1L)
                     .row(2L)
@@ -949,10 +1005,10 @@ public class TestHiveGlueMetastore
             // prepare statistics
             ComputedStatistics statistics = ComputedStatistics.builder(ImmutableList.of(), ImmutableList.of())
                     .addTableStatistic(TableStatisticType.ROW_COUNT, singleValueBlock(5))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", MIN_VALUE), singleValueBlock(1))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", MAX_VALUE), singleValueBlock(5))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", NUMBER_OF_DISTINCT_VALUES), singleValueBlock(5))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", NUMBER_OF_NON_NULL_VALUES), singleValueBlock(5))
+                    .addColumnStatistic(MIN_VALUE.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
+                    .addColumnStatistic(MAX_VALUE.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
+                    .addColumnStatistic(NUMBER_OF_DISTINCT_VALUES.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
+                    .addColumnStatistic(NUMBER_OF_NON_NULL_VALUES.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
                     .build();
 
             // finish CTAS
@@ -980,7 +1036,7 @@ public class TestHiveGlueMetastore
             ConnectorOutputTableHandle createTableHandle = metadata.beginCreateTable(session, tableMetadata, Optional.empty(), NO_RETRIES);
 
             // write data
-            ConnectorPageSink sink = pageSinkProvider.createPageSink(transaction.getTransactionHandle(), session, createTableHandle);
+            ConnectorPageSink sink = pageSinkProvider.createPageSink(transaction.getTransactionHandle(), session, createTableHandle, TESTING_PAGE_SINK_ID);
             MaterializedResult data = MaterializedResult.resultBuilder(session, BigintType.BIGINT, BigintType.BIGINT)
                     .row(1L, 1L)
                     .row(2L, 1L)
@@ -994,17 +1050,17 @@ public class TestHiveGlueMetastore
             // prepare statistics
             ComputedStatistics statistics1 = ComputedStatistics.builder(ImmutableList.of("part_column"), ImmutableList.of(singleValueBlock(1)))
                     .addTableStatistic(TableStatisticType.ROW_COUNT, singleValueBlock(3))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", MIN_VALUE), singleValueBlock(1))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", MAX_VALUE), singleValueBlock(3))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", NUMBER_OF_DISTINCT_VALUES), singleValueBlock(3))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", NUMBER_OF_NON_NULL_VALUES), singleValueBlock(3))
+                    .addColumnStatistic(MIN_VALUE.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
+                    .addColumnStatistic(MAX_VALUE.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
+                    .addColumnStatistic(NUMBER_OF_DISTINCT_VALUES.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
+                    .addColumnStatistic(NUMBER_OF_NON_NULL_VALUES.createColumnStatisticMetadata("a_column"), singleValueBlock(1))
                     .build();
             ComputedStatistics statistics2 = ComputedStatistics.builder(ImmutableList.of("part_column"), ImmutableList.of(singleValueBlock(2)))
                     .addTableStatistic(TableStatisticType.ROW_COUNT, singleValueBlock(2))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", MIN_VALUE), singleValueBlock(4))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", MAX_VALUE), singleValueBlock(5))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", NUMBER_OF_DISTINCT_VALUES), singleValueBlock(2))
-                    .addColumnStatistic(new ColumnStatisticMetadata("a_column", NUMBER_OF_NON_NULL_VALUES), singleValueBlock(2))
+                    .addColumnStatistic(MIN_VALUE.createColumnStatisticMetadata("a_column"), singleValueBlock(4))
+                    .addColumnStatistic(MAX_VALUE.createColumnStatisticMetadata("a_column"), singleValueBlock(4))
+                    .addColumnStatistic(NUMBER_OF_DISTINCT_VALUES.createColumnStatisticMetadata("a_column"), singleValueBlock(4))
+                    .addColumnStatistic(NUMBER_OF_NON_NULL_VALUES.createColumnStatisticMetadata("a_column"), singleValueBlock(4))
                     .build();
 
             // finish CTAS
@@ -1305,8 +1361,6 @@ public class TestHiveGlueMetastore
 
     /**
      * @param filterList should be same sized list as expectedValuesList
-     * @param expectedValuesList
-     * @throws Exception
      */
     private void doGetPartitionsFilterTest(
             List<ColumnMetadata> columnMetadata,
@@ -1397,14 +1451,11 @@ public class TestHiveGlueMetastore
             return new PartitionValues(Arrays.asList(values));
         }
 
-        private static PartitionValues make(List<String> values)
-        {
-            return new PartitionValues(values);
-        }
-
         private PartitionValues(List<String> values)
         {
-            this.values = values;
+            // Elements are nullable
+            //noinspection Java9CollectionFactory
+            this.values = unmodifiableList(new ArrayList<>(requireNonNull(values, "values is null")));
         }
 
         public List<String> getValues()

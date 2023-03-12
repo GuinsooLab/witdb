@@ -14,6 +14,7 @@
 package io.trino.plugin.hive;
 
 import com.google.common.collect.ImmutableList;
+import io.trino.hive.thrift.metastore.DataOperationType;
 import io.trino.plugin.hive.acid.AcidOperation;
 import io.trino.plugin.hive.acid.AcidTransaction;
 import io.trino.plugin.hive.metastore.AcidTransactionOwner;
@@ -30,9 +31,7 @@ import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
-import io.trino.spi.statistics.ColumnStatisticType;
 import io.trino.spi.type.Type;
-import org.apache.hadoop.hive.metastore.api.DataOperationType;
 
 import java.util.List;
 import java.util.Map;
@@ -81,7 +80,7 @@ public class HiveMetastoreClosure
         return delegate.getTable(databaseName, tableName);
     }
 
-    public Set<ColumnStatisticType> getSupportedColumnStatistics(Type type)
+    public Set<HiveColumnStatisticType> getSupportedColumnStatistics(Type type)
     {
         return delegate.getSupportedColumnStatistics(type);
     }
@@ -306,8 +305,14 @@ public class HiveMetastoreClosure
         return delegate.listTablePrivileges(databaseName, tableName, tableOwner, principal);
     }
 
+    public void checkSupportsTransactions()
+    {
+        delegate.checkSupportsTransactions();
+    }
+
     public long openTransaction(AcidTransactionOwner transactionOwner)
     {
+        checkSupportsTransactions();
         return delegate.openTransaction(transactionOwner);
     }
 

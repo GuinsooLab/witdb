@@ -21,7 +21,6 @@ import io.trino.spi.block.DictionaryBlock;
 import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.type.Type;
-import org.openjdk.jol.info.ClassLayout;
 
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
@@ -38,6 +37,7 @@ import java.util.function.Function;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.BLOCK_POSITION;
 import static io.trino.spi.function.InvocationConvention.InvocationReturnConvention.FAIL_ON_NULL;
@@ -66,7 +66,7 @@ import static java.util.stream.Collectors.joining;
 public final class SortedRangeSet
         implements ValueSet
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(SortedRangeSet.class).instanceSize();
+    private static final int INSTANCE_SIZE = instanceSize(SortedRangeSet.class);
 
     private final Type type;
     private final MethodHandle equalOperator;
@@ -223,10 +223,7 @@ public final class SortedRangeSet
         return new SortedRangeSet(
                 type,
                 inclusive,
-                new DictionaryBlock(
-                        dictionaryIndex,
-                        block,
-                        dictionary));
+                DictionaryBlock.create(dictionaryIndex, block, dictionary));
     }
 
     /**
@@ -259,7 +256,7 @@ public final class SortedRangeSet
         return new SortedRangeSet(
                 type,
                 new boolean[] {true, true},
-                new RunLengthEncodedBlock(block, 2));
+                RunLengthEncodedBlock.create(block, 2));
     }
 
     static SortedRangeSet copyOf(Type type, Collection<Range> ranges)
@@ -921,7 +918,9 @@ public final class SortedRangeSet
         List<Range> ranges = getRanges().getOrderedRanges();
         Type type = getType();
 
-        Range typeRange = type.getRange().map(range -> Range.range(type, range.getMin(), true, range.getMax(), true)).orElse(Range.all(type));
+        Range typeRange = type.getRange()
+                .map(range -> Range.range(type, range.getMin(), true, range.getMax(), true))
+                .orElseGet(() -> Range.all(type));
 
         List<Object> result = new ArrayList<>();
         for (Range range : ranges) {
@@ -981,6 +980,44 @@ public final class SortedRangeSet
 
         return Stream.concat(prefix, suffix)
                 .collect(joining(", ", "{", "}"));
+    }
+
+    public static Builder builder(Type type, int expectedSize)
+    {
+        return new SortedRangeSet.Builder(type, expectedSize);
+    }
+
+    public static class Builder
+    {
+        private final Type type;
+        private final MethodHandle rangeComparisonOperator;
+        private final List<Range> ranges;
+
+        private Builder(Type type, int expectedSize)
+        {
+            this.type = requireNonNull(type, "type is null");
+            // Calculating the comparison operator once instead of per range to avoid hitting TypeOperators cache
+            this.rangeComparisonOperator = Range.getComparisonOperator(type);
+            this.ranges = new ArrayList<>(expectedSize);
+        }
+
+        public Builder addRangeInclusive(Object lowValue, Object highValue)
+        {
+            ranges.add(new Range(type, true, Optional.of(lowValue), true, Optional.of(highValue), rangeComparisonOperator));
+            return this;
+        }
+
+        public Builder addValue(Object value)
+        {
+            Optional<Object> valueAsOptional = Optional.of(value);
+            ranges.add(new Range(type, true, valueAsOptional, true, valueAsOptional, rangeComparisonOperator));
+            return this;
+        }
+
+        public SortedRangeSet build()
+        {
+            return SortedRangeSet.of(ranges);
+        }
     }
 
     static SortedRangeSet buildFromUnsortedRanges(Type type, Collection<Range> unsortedRanges)
@@ -1104,17 +1141,11 @@ public final class SortedRangeSet
         @Override
         public int compareTo(RangeView that)
         {
-            int compare;
-            compare = compareLowBound(that);
-            if (compare != 0) {
-                return compare;
+            int lowBoundCompare = compareLowBound(that);
+            if (lowBoundCompare != 0) {
+                return lowBoundCompare;
             }
-            compare = compareHighBound(that);
-            if (compare != 0) {
-                return compare;
-            }
-
-            return 0;
+            return compareHighBound(that);
         }
 
         private int compareLowBound(RangeView that)

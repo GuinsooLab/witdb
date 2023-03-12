@@ -14,18 +14,18 @@
 package io.trino.spi.block;
 
 import io.airlift.slice.Slice;
-import org.openjdk.jol.info.ClassLayout;
 
 import java.util.OptionalInt;
 import java.util.function.ObjLongConsumer;
 
+import static io.airlift.slice.SizeOf.instanceSize;
 import static java.lang.String.format;
 
 public class SingleMapBlockWriter
         extends AbstractSingleMapBlock
         implements BlockBuilder
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(SingleMapBlockWriter.class).instanceSize();
+    private static final int INSTANCE_SIZE = instanceSize(SingleMapBlockWriter.class);
 
     private final int offset;
     private final BlockBuilder keyBlockBuilder;
@@ -92,7 +92,7 @@ public class SingleMapBlockWriter
     {
         consumer.accept(keyBlockBuilder, keyBlockBuilder.getRetainedSizeInBytes());
         consumer.accept(valueBlockBuilder, valueBlockBuilder.getRetainedSizeInBytes());
-        consumer.accept(this, (long) INSTANCE_SIZE);
+        consumer.accept(this, INSTANCE_SIZE);
     }
 
     @Override
@@ -219,7 +219,7 @@ public class SingleMapBlockWriter
     }
 
     @Override
-    public BlockBuilder newBlockBuilderLike(BlockBuilderStatus blockBuilderStatus)
+    public BlockBuilder newBlockBuilderLike(int expectedEntries, BlockBuilderStatus blockBuilderStatus)
     {
         throw new UnsupportedOperationException();
     }

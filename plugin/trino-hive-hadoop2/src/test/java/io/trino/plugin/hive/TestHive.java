@@ -13,14 +13,13 @@
  */
 package io.trino.plugin.hive;
 
+import com.google.common.net.HostAndPort;
 import org.apache.hadoop.net.NetUtils;
 import org.testng.SkipException;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Parameters;
 import org.testng.annotations.Test;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 // staging directory is shared mutable state
@@ -28,17 +27,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class TestHive
         extends AbstractTestHive
 {
-    private int hiveVersionMajor;
-
-    @Parameters({
-            "hive.hadoop2.metastoreHost",
-            "hive.hadoop2.metastorePort",
-            "hive.hadoop2.databaseName",
-            "hive.hadoop2.hiveVersionMajor",
-            "hive.hadoop2.timeZone",
-    })
+    @Parameters({"test.metastore", "test.database"})
     @BeforeClass
-    public void initialize(String host, int port, String databaseName, int hiveVersionMajor, String timeZone)
+    public void initialize(String metastore, String database)
     {
         String hadoopMasterIp = System.getProperty("hadoop-master-ip");
         if (hadoopMasterIp != null) {
@@ -48,16 +39,7 @@ public class TestHive
             NetUtils.addStaticResolution("hadoop-master", hadoopMasterIp);
         }
 
-        checkArgument(hiveVersionMajor > 0, "Invalid hiveVersionMajor: %s", hiveVersionMajor);
-        setup(host, port, databaseName, hiveVersionMajor >= 3 ? "UTC" : timeZone);
-
-        this.hiveVersionMajor = hiveVersionMajor;
-    }
-
-    private int getHiveVersionMajor()
-    {
-        checkState(hiveVersionMajor > 0, "hiveVersionMajor not set");
-        return hiveVersionMajor;
+        setup(HostAndPort.fromString(metastore), database);
     }
 
     @Test
@@ -69,24 +51,14 @@ public class TestHive
     }
 
     @Override
-    public void testGetPartitionSplitsTableOfflinePartition()
-    {
-        if (getHiveVersionMajor() >= 2) {
-            throw new SkipException("ALTER TABLE .. ENABLE OFFLINE was removed in Hive 2.0 and this is a prerequisite for this test");
-        }
-
-        super.testGetPartitionSplitsTableOfflinePartition();
-    }
-
-    @Override
     public void testHideDeltaLakeTables()
     {
         assertThatThrownBy(super::testHideDeltaLakeTables)
                 .hasMessageMatching("(?s)\n" +
                         "Expecting\n" +
-                        " <\\[.*\\b(\\w+.tmp_trino_test_trino_delta_lake_table_\\w+)\\b.*]>\n" +
+                        "  \\[.*\\b(\\w+.tmp_trino_test_trino_delta_lake_table_\\w+)\\b.*]\n" +
                         "not to contain\n" +
-                        " <\\[\\1]>\n" +
+                        "  \\[\\1]\n" +
                         "but found.*");
 
         throw new SkipException("not supported");

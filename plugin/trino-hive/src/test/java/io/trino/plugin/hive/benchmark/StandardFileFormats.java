@@ -14,7 +14,12 @@
 package io.trino.plugin.hive.benchmark;
 
 import com.google.common.collect.ImmutableMap;
-import io.airlift.slice.OutputStreamSliceOutput;
+import io.trino.filesystem.hdfs.HdfsFileSystemFactory;
+import io.trino.hdfs.HdfsEnvironment;
+import io.trino.hive.formats.encodings.ColumnEncodingFactory;
+import io.trino.hive.formats.encodings.binary.BinaryColumnEncodingFactory;
+import io.trino.hive.formats.encodings.text.TextColumnEncodingFactory;
+import io.trino.hive.formats.rcfile.RcFileWriter;
 import io.trino.orc.OrcReaderOptions;
 import io.trino.orc.OrcWriter;
 import io.trino.orc.OrcWriterOptions;
@@ -25,7 +30,6 @@ import io.trino.parquet.writer.ParquetSchemaConverter;
 import io.trino.parquet.writer.ParquetWriter;
 import io.trino.parquet.writer.ParquetWriterOptions;
 import io.trino.plugin.hive.FileFormatDataSourceStats;
-import io.trino.plugin.hive.HdfsEnvironment;
 import io.trino.plugin.hive.HiveCompressionCodec;
 import io.trino.plugin.hive.HiveConfig;
 import io.trino.plugin.hive.HivePageSourceFactory;
@@ -36,12 +40,6 @@ import io.trino.plugin.hive.orc.OrcPageSourceFactory;
 import io.trino.plugin.hive.parquet.ParquetPageSourceFactory;
 import io.trino.plugin.hive.parquet.ParquetReaderConfig;
 import io.trino.plugin.hive.rcfile.RcFilePageSourceFactory;
-import io.trino.rcfile.AircompressorCodecFactory;
-import io.trino.rcfile.HadoopCodecFactory;
-import io.trino.rcfile.RcFileEncoding;
-import io.trino.rcfile.RcFileWriter;
-import io.trino.rcfile.binary.BinaryRcFileEncoding;
-import io.trino.rcfile.text.TextRcFileEncoding;
 import io.trino.spi.Page;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.type.Type;
@@ -58,6 +56,8 @@ import java.util.Optional;
 import static io.trino.orc.OrcWriteValidation.OrcWriteValidationMode.BOTH;
 import static io.trino.parquet.writer.ParquetSchemaConverter.HIVE_PARQUET_USE_INT96_TIMESTAMP_ENCODING;
 import static io.trino.parquet.writer.ParquetSchemaConverter.HIVE_PARQUET_USE_LEGACY_DECIMAL_ENCODING;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_FACTORY;
+import static io.trino.plugin.hive.HiveTestUtils.SESSION;
 import static io.trino.plugin.hive.HiveTestUtils.createGenericHiveRecordCursorProvider;
 import static io.trino.plugin.hive.benchmark.AbstractFileFormat.createSchema;
 import static io.trino.plugin.hive.metastore.StorageFormat.fromHiveStorageFormat;
@@ -95,7 +95,7 @@ public final class StandardFileFormats
             return new PrestoRcFileFormatWriter(
                     targetFile,
                     columnTypes,
-                    new BinaryRcFileEncoding(UTC),
+                    new BinaryColumnEncodingFactory(UTC),
                     compressionCodec);
         }
     };
@@ -126,7 +126,7 @@ public final class StandardFileFormats
             return new PrestoRcFileFormatWriter(
                     targetFile,
                     columnTypes,
-                    new TextRcFileEncoding(),
+                    new TextColumnEncodingFactory(),
                     compressionCodec);
         }
     };
@@ -142,7 +142,7 @@ public final class StandardFileFormats
         @Override
         public Optional<HivePageSourceFactory> getHivePageSourceFactory(HdfsEnvironment hdfsEnvironment)
         {
-            return Optional.of(new OrcPageSourceFactory(new OrcReaderOptions(), hdfsEnvironment, new FileFormatDataSourceStats(), UTC));
+            return Optional.of(new OrcPageSourceFactory(new OrcReaderOptions(), HDFS_FILE_SYSTEM_FACTORY, new FileFormatDataSourceStats(), UTC));
         }
 
         @Override
@@ -173,7 +173,11 @@ public final class StandardFileFormats
         @Override
         public Optional<HivePageSourceFactory> getHivePageSourceFactory(HdfsEnvironment hdfsEnvironment)
         {
-            return Optional.of(new ParquetPageSourceFactory(hdfsEnvironment, new FileFormatDataSourceStats(), new ParquetReaderConfig(), new HiveConfig()));
+            return Optional.of(new ParquetPageSourceFactory(
+                    new HdfsFileSystemFactory(hdfsEnvironment),
+                    new FileFormatDataSourceStats(),
+                    new ParquetReaderConfig(),
+                    new HiveConfig()));
         }
 
         @Override
@@ -314,7 +318,9 @@ public final class StandardFileFormats
                     ParquetWriterOptions.builder().build(),
                     compressionCodec.getParquetCompressionCodec(),
                     "test-version",
-                    Optional.of(DateTimeZone.getDefault()));
+                    false,
+                    Optional.of(DateTimeZone.getDefault()),
+                    Optional.empty());
         }
 
         @Override
@@ -341,7 +347,7 @@ public final class StandardFileFormats
                 throws IOException
         {
             writer = new OrcWriter(
-                    new OutputStreamOrcDataSink(new FileOutputStream(targetFile)),
+                    OutputStreamOrcDataSink.create(HDFS_FILE_SYSTEM_FACTORY.create(SESSION).newOutputFile(targetFile.getAbsolutePath())),
                     columnNames,
                     types,
                     OrcType.createRootOrcType(columnNames, types),
@@ -373,15 +379,14 @@ public final class StandardFileFormats
     {
         private final RcFileWriter writer;
 
-        public PrestoRcFileFormatWriter(File targetFile, List<Type> types, RcFileEncoding encoding, HiveCompressionCodec compressionCodec)
+        public PrestoRcFileFormatWriter(File targetFile, List<Type> types, ColumnEncodingFactory encoding, HiveCompressionCodec compressionCodec)
                 throws IOException
         {
             writer = new RcFileWriter(
-                    new OutputStreamSliceOutput(new FileOutputStream(targetFile)),
+                    new FileOutputStream(targetFile),
                     types,
                     encoding,
-                    compressionCodec.getCodec().map(Class::getName),
-                    new AircompressorCodecFactory(new HadoopCodecFactory(getClass().getClassLoader())),
+                    compressionCodec.getHiveCompressionKind(),
                     ImmutableMap.of(),
                     true);
         }

@@ -13,6 +13,8 @@
  */
 package io.trino.plugin.hive.metastore;
 
+import io.trino.hive.thrift.metastore.DataOperationType;
+import io.trino.plugin.hive.HiveColumnStatisticType;
 import io.trino.plugin.hive.HivePartition;
 import io.trino.plugin.hive.HiveType;
 import io.trino.plugin.hive.PartitionStatistics;
@@ -22,9 +24,7 @@ import io.trino.plugin.hive.metastore.HivePrivilegeInfo.HivePrivilege;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.RoleGrant;
-import io.trino.spi.statistics.ColumnStatisticType;
 import io.trino.spi.type.Type;
-import org.apache.hadoop.hive.metastore.api.DataOperationType;
 
 import java.util.List;
 import java.util.Map;
@@ -64,7 +64,7 @@ public abstract class ForwardingHiveMetastore
     }
 
     @Override
-    public Set<ColumnStatisticType> getSupportedColumnStatistics(Type type)
+    public Set<HiveColumnStatisticType> getSupportedColumnStatistics(Type type)
     {
         return delegate.getSupportedColumnStatistics(type);
     }
@@ -343,6 +343,12 @@ public abstract class ForwardingHiveMetastore
             Optional<HivePrincipal> principal)
     {
         return delegate.listTablePrivileges(databaseName, tableName, tableOwner, principal);
+    }
+
+    @Override
+    public void checkSupportsTransactions()
+    {
+        delegate.checkSupportsTransactions();
     }
 
     @Override

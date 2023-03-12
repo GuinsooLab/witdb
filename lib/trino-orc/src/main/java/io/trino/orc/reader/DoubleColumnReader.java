@@ -27,7 +27,6 @@ import io.trino.spi.block.LongArrayBlock;
 import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.type.DoubleType;
 import io.trino.spi.type.Type;
-import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 
@@ -37,6 +36,7 @@ import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Verify.verifyNotNull;
+import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.trino.orc.metadata.Stream.StreamKind.DATA;
 import static io.trino.orc.metadata.Stream.StreamKind.PRESENT;
@@ -50,7 +50,7 @@ import static java.util.Objects.requireNonNull;
 public class DoubleColumnReader
         implements ColumnReader
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(DoubleColumnReader.class).instanceSize();
+    private static final int INSTANCE_SIZE = instanceSize(DoubleColumnReader.class);
 
     private final OrcColumn column;
 

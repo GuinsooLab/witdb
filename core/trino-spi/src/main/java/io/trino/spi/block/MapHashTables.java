@@ -15,7 +15,6 @@ package io.trino.spi.block;
 
 import io.trino.spi.TrinoException;
 import io.trino.spi.type.MapType;
-import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
@@ -24,6 +23,7 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.util.Arrays;
 import java.util.Optional;
 
+import static io.airlift.slice.SizeOf.instanceSize;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.lang.String.format;
@@ -31,7 +31,7 @@ import static java.lang.String.format;
 @ThreadSafe
 public final class MapHashTables
 {
-    public static final int INSTANCE_SIZE = ClassLayout.parseClass(MapHashTables.class).instanceSize();
+    public static final int INSTANCE_SIZE = instanceSize(MapHashTables.class);
 
     // inverse of hash fill ratio, must be integer
     static final int HASH_MULTIPLIER = 2;

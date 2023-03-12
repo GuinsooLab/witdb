@@ -16,12 +16,12 @@ package io.trino.plugin.iceberg;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.io.Files;
 import io.trino.Session;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.TableHandle;
 import io.trino.plugin.hive.metastore.Database;
 import io.trino.plugin.hive.metastore.HiveMetastore;
+import io.trino.plugin.iceberg.catalog.file.TestingIcebergFileMetastoreCatalogModule;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
@@ -32,6 +32,9 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -44,15 +47,14 @@ import static io.trino.plugin.hive.metastore.file.FileHiveMetastore.createTestin
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.any;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.anyTree;
-import static io.trino.sql.planner.assertions.PlanMatchPattern.equiJoinClause;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.expression;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.filter;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.join;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.project;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.tableScan;
 import static io.trino.sql.planner.plan.JoinNode.Type.INNER;
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.testing.TestingSession.testSessionBuilder;
-import static io.trino.testing.sql.TestTable.randomTableSuffix;
 import static java.lang.String.format;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -71,13 +73,18 @@ public class TestIcebergProjectionPushdownPlans
                 .setSchema(SCHEMA)
                 .build();
 
-        metastoreDir = Files.createTempDir();
+        try {
+            metastoreDir = Files.createTempDirectory(null).toFile();
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
         HiveMetastore metastore = createTestingFileHiveMetastore(metastoreDir);
         LocalQueryRunner queryRunner = LocalQueryRunner.create(session);
 
         queryRunner.createCatalog(
                 CATALOG,
-                new TestingIcebergConnectorFactory(Optional.of(metastore), Optional.empty(), EMPTY_MODULE),
+                new TestingIcebergConnectorFactory(Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)), Optional.empty(), EMPTY_MODULE),
                 ImmutableMap.of());
 
         Database database = Database.builder()
@@ -102,7 +109,7 @@ public class TestIcebergProjectionPushdownPlans
     @Test
     public void testPushdownDisabled()
     {
-        String testTable = "test_disabled_pushdown" + randomTableSuffix();
+        String testTable = "test_disabled_pushdown" + randomNameSuffix();
 
         Session session = Session.builder(getQueryRunner().getDefaultSession())
                 .setCatalogSessionProperty(CATALOG, "projection_pushdown_enabled", "false")
@@ -124,12 +131,12 @@ public class TestIcebergProjectionPushdownPlans
     @Test
     public void testDereferencePushdown()
     {
-        String testTable = "test_simple_projection_pushdown" + randomTableSuffix();
+        String testTable = "test_simple_projection_pushdown" + randomNameSuffix();
         QualifiedObjectName completeTableName = new QualifiedObjectName(CATALOG, SCHEMA, testTable);
 
         getQueryRunner().execute(format(
                 "CREATE TABLE %s (col0, col1) WITH (partitioning = ARRAY['col1']) AS" +
-                        " SELECT CAST(row(5, 6) AS row(x bigint, y bigint)) AS col0, 5 AS col1 WHERE false",
+                        " SELECT CAST(row(5, 6) AS row(x bigint, y bigint)) AS col0, 5 AS col1",
                 testTable));
 
         Session session = getQueryRunner().getDefaultSession();
@@ -204,28 +211,29 @@ public class TestIcebergProjectionPushdownPlans
                                         "expr_0_x", expression("expr_0[1]"),
                                         "expr_0", expression("expr_0"),
                                         "expr_0_y", expression("expr_0[2]")),
-                                join(
-                                        INNER,
-                                        ImmutableList.of(equiJoinClause("t_expr_1", "s_expr_1")),
-                                        anyTree(
-                                                filter(
-                                                        "x = BIGINT '2'",
+                                join(INNER, builder -> builder
+                                        .equiCriteria("t_expr_1", "s_expr_1")
+                                        .left(
+                                                anyTree(
+                                                        filter(
+                                                                "x = BIGINT '2'",
+                                                                tableScan(
+                                                                        table -> {
+                                                                            IcebergTableHandle icebergTableHandle = (IcebergTableHandle) table;
+                                                                            TupleDomain<IcebergColumnHandle> unenforcedConstraint = icebergTableHandle.getUnenforcedPredicate();
+                                                                            Set<IcebergColumnHandle> expectedProjections = ImmutableSet.of(column0Handle, column1Handle, columnX);
+                                                                            TupleDomain<IcebergColumnHandle> expectedUnenforcedConstraint = TupleDomain.withColumnDomains(
+                                                                                    ImmutableMap.of(columnX, Domain.singleValue(BIGINT, 2L)));
+                                                                            return icebergTableHandle.getProjectedColumns().equals(expectedProjections) &&
+                                                                                    unenforcedConstraint.equals(expectedUnenforcedConstraint);
+                                                                        },
+                                                                        TupleDomain.all(),
+                                                                        ImmutableMap.of("x", equalTo(columnX), "expr_0", equalTo(column0Handle), "t_expr_1", equalTo(column1Handle))))))
+                                        .right(
+                                                anyTree(
                                                         tableScan(
-                                                                table -> {
-                                                                    IcebergTableHandle icebergTableHandle = (IcebergTableHandle) table;
-                                                                    TupleDomain<IcebergColumnHandle> unenforcedConstraint = icebergTableHandle.getUnenforcedPredicate();
-                                                                    Set<IcebergColumnHandle> expectedProjections = ImmutableSet.of(column0Handle, column1Handle, columnX);
-                                                                    TupleDomain<IcebergColumnHandle> expectedUnenforcedConstraint = TupleDomain.withColumnDomains(
-                                                                            ImmutableMap.of(columnX, Domain.singleValue(BIGINT, 2L)));
-                                                                    return icebergTableHandle.getProjectedColumns().equals(expectedProjections) &&
-                                                                            unenforcedConstraint.equals(expectedUnenforcedConstraint);
-                                                                },
+                                                                equalTo(((IcebergTableHandle) tableHandle.get().getConnectorHandle()).withProjectedColumns(Set.of(column1Handle))),
                                                                 TupleDomain.all(),
-                                                                ImmutableMap.of("x", equalTo(columnX), "expr_0", equalTo(column0Handle), "t_expr_1", equalTo(column1Handle))))),
-                                        anyTree(
-                                                tableScan(
-                                                        equalTo(((IcebergTableHandle) tableHandle.get().getConnectorHandle()).withProjectedColumns(Set.of(column1Handle))),
-                                                        TupleDomain.all(),
-                                                        ImmutableMap.of("s_expr_1", equalTo(column1Handle))))))));
+                                                                ImmutableMap.of("s_expr_1", equalTo(column1Handle)))))))));
     }
 }

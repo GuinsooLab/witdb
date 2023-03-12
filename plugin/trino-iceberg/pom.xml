@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.trino</groupId>
         <artifactId>trino-root</artifactId>
-        <version>391-SNAPSHOT</version>
+        <version>411-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -15,18 +15,40 @@
 
     <properties>
         <air.main.basedir>${project.parent.basedir}</air.main.basedir>
-        <dep.iceberg.version>0.13.2</dep.iceberg.version>
+
+        <!--
+          Project's default for air.test.parallel is 'methods'. By design, 'instances' runs all the methods in the same instance in the same thread,
+          but two methods on two different instances will be running in different threads.
+          As a side effect, it prevents TestNG from initializing multiple test instances upfront, which happens with 'methods'.
+          A potential downside can be long tail single-threaded execution of a single long test class.
+          TODO (https://github.com/trinodb/trino/issues/11294) remove when we upgrade to surefire with https://issues.apache.org/jira/browse/SUREFIRE-1967
+          -->
+        <air.test.parallel>instances</air.test.parallel>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>io.trino</groupId>
+            <artifactId>trino-filesystem</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-hdfs</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
             <artifactId>trino-hive</artifactId>
             <exclusions>
                 <exclusion>
-                    <!-- calcite-core and iceberg-data have conflicting versions of org.apache.commons:commons-lang3 -->
+                    <!-- calcite-core and Iceberg have conflicting versions of org.apache.commons:commons-lang3 -->
                     <groupId>com.linkedin.calcite</groupId>
                     <artifactId>calcite-core</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.airlift</groupId>
+                    <artifactId>http-client</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -59,6 +81,11 @@
         <dependency>
             <groupId>io.trino.hive</groupId>
             <artifactId>hive-apache</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino.hive</groupId>
+            <artifactId>hive-thrift</artifactId>
         </dependency>
 
         <dependency>
@@ -128,6 +155,26 @@
         </dependency>
 
         <dependency>
+            <groupId>dev.failsafe</groupId>
+            <artifactId>failsafe</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>javax.inject</groupId>
             <artifactId>javax.inject</artifactId>
         </dependency>
@@ -143,58 +190,40 @@
         </dependency>
 
         <dependency>
-            <groupId>net.jodah</groupId>
-            <artifactId>failsafe</artifactId>
+            <groupId>org.apache.datasketches</groupId>
+            <artifactId>datasketches-java</artifactId>
+            <version>3.3.0</version>
         </dependency>
 
-        <!-- Iceberg -->
+        <dependency>
+            <groupId>org.apache.datasketches</groupId>
+            <artifactId>datasketches-memory</artifactId>
+            <version>2.1.0</version>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-api</artifactId>
-            <version>${dep.iceberg.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-core</artifactId>
-            <version>${dep.iceberg.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.avro</groupId>
-                    <artifactId>avro</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.iceberg</groupId>
-            <artifactId>iceberg-data</artifactId>
-            <version>${dep.iceberg.version}</version>
-            <exclusions>
-                <!-- The parquet-avro dependency uses a different version of org.apache.thrift:libthrift -->
-                <exclusion>
-                    <groupId>org.apache.parquet</groupId>
-                    <artifactId>parquet-avro</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.iceberg</groupId>
-            <artifactId>iceberg-hive-metastore</artifactId>
-            <version>${dep.iceberg.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-parquet</artifactId>
-            <version>${dep.iceberg.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.parquet</groupId>
-                    <artifactId>parquet-avro</artifactId>
-                </exclusion>
-            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
         </dependency>
 
         <dependency>
@@ -204,6 +233,12 @@
 
         <!-- used by tests but also needed transitively -->
         <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-hadoop-toolkit</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
             <groupId>io.airlift</groupId>
             <artifactId>concurrent</artifactId>
             <scope>runtime</scope>
@@ -212,6 +247,13 @@
         <dependency>
             <groupId>io.airlift</groupId>
             <artifactId>log-manager</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- used by tests but also needed transitively -->
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>node</artifactId>
             <scope>runtime</scope>
         </dependency>
 
@@ -228,22 +270,41 @@
         </dependency>
 
         <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+            <version>5.1</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.httpcomponents.core5</groupId>
+            <artifactId>httpcore5</artifactId>
+            <version>5.1.1</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.iceberg</groupId>
-            <artifactId>iceberg-orc</artifactId>
+            <artifactId>iceberg-bundled-guava</artifactId>
             <version>${dep.iceberg.version}</version>
             <scope>runtime</scope>
-            <exclusions>
-                <exclusion>
-                    <!-- This version of the Avro dependency fails Maven Enforcer RequireUpperBoundDeps checks -->
-                    <groupId>org.apache.avro</groupId>
-                    <artifactId>avro</artifactId>
-                </exclusion>
-            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-orc</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <dependency>
             <groupId>org.jetbrains</groupId>
             <artifactId>annotations</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
 
@@ -273,6 +334,19 @@
         </dependency>
 
         <!-- for testing -->
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-exchange-filesystem</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-exchange-filesystem</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>io.trino</groupId>
             <artifactId>trino-hive</artifactId>
@@ -344,6 +418,12 @@
 
         <dependency>
             <groupId>io.airlift</groupId>
+            <artifactId>http-server</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.airlift</groupId>
             <artifactId>testing</artifactId>
             <scope>test</scope>
         </dependency>
@@ -365,8 +445,33 @@
         </dependency>
 
         <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-core</artifactId>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.eclipse.jetty.toolchain</groupId>
+            <artifactId>jetty-servlet-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -375,10 +480,22 @@
             <artifactId>testng</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>3.36.0.3</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-maven-plugin</artifactId>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
@@ -401,6 +518,10 @@
                         <!-- com.amazonaws:aws-java-sdk-core and software.amazon.awssdk:sdk-core MIME type file duplicate-->
                         <ignoredResourcePattern>mime.types</ignoredResourcePattern>
                         <ignoredResourcePattern>about.html</ignoredResourcePattern>
+                        <ignoredResourcePattern>iceberg-build.properties</ignoredResourcePattern>
+                        <ignoredResourcePattern>mozilla/public-suffix-list.txt</ignoredResourcePattern>
+                        <!-- TODO: To be removed https://github.com/trinodb/trino/issues/15371 -->
+                        <ignoredResourcePattern>google/protobuf/.*\.proto$</ignoredResourcePattern>
                     </ignoredResourcePatterns>
                 </configuration>
             </plugin>
@@ -421,10 +542,18 @@
                         <configuration>
                             <excludes>
                                 <exclude>**/TestIcebergGlueCatalogConnectorSmokeTest.java</exclude>
-                                <exclude>**/TestTrinoGlueCatalogTest.java</exclude>
+                                <exclude>**/TestTrinoGlueCatalog.java</exclude>
                                 <exclude>**/TestSharedGlueMetastore.java</exclude>
                                 <exclude>**/TestIcebergGlueCatalogAccessOperations.java</exclude>
-                                <exclude>**/TestIcebergGlueCatalogMaterializedViewTest.java</exclude>
+                                <exclude>**/TestIcebergGlueCatalogMaterializedView.java</exclude>
+                                <exclude>**/TestIcebergGlueCreateTableFailure.java</exclude>
+                                <exclude>**/TestIcebergGlueTableOperationsInsertFailure.java</exclude>
+                                <exclude>**/TestIcebergGlueCatalogSkipArchive.java</exclude>
+                                <exclude>**/TestIcebergGcsConnectorSmokeTest.java</exclude>
+                                <exclude>**/TestIcebergAbfsConnectorSmokeTest.java</exclude>
+                                <exclude>io/trino/plugin/iceberg/catalog/jdbc/Test*.java</exclude>
+                                <exclude>io/trino/plugin/iceberg/catalog/rest/Test*.java</exclude>
+                                <exclude>**/Test*FailureRecoveryTest.java</exclude>
                             </excludes>
                         </configuration>
                     </plugin>
@@ -433,7 +562,42 @@
         </profile>
 
         <profile>
-            <id>test-glue-catalog</id>
+            <id>fte-tests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/Test*FailureRecoveryTest.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>additional-catalog-tests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/io/trino/plugin/iceberg/catalog/jdbc/Test*.java</include>
+                                <include>**/io/trino/plugin/iceberg/catalog/rest/Test*.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>cloud-tests</id>
             <build>
                 <plugins>
                     <plugin>
@@ -442,10 +606,15 @@
                         <configuration>
                             <includes>
                                 <include>**/TestIcebergGlueCatalogConnectorSmokeTest.java</include>
-                                <include>**/TestTrinoGlueCatalogTest.java</include>
+                                <include>**/TestTrinoGlueCatalog.java</include>
                                 <include>**/TestSharedGlueMetastore.java</include>
                                 <include>**/TestIcebergGlueCatalogAccessOperations.java</include>
-                                <include>**/TestIcebergGlueCatalogMaterializedViewTest.java</include>
+                                <include>**/TestIcebergGlueCatalogMaterializedView.java</include>
+                                <include>**/TestIcebergGlueCreateTableFailure.java</include>
+                                <include>**/TestIcebergGlueTableOperationsInsertFailure.java</include>
+                                <include>**/TestIcebergGlueCatalogSkipArchive.java</include>
+                                <include>**/TestIcebergGcsConnectorSmokeTest.java</include>
+                                <include>**/TestIcebergAbfsConnectorSmokeTest.java</include>
                             </includes>
                         </configuration>
                     </plugin>

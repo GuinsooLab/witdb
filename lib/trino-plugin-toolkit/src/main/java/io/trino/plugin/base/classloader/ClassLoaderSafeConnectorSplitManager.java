@@ -21,6 +21,8 @@ import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.DynamicFilter;
+import io.trino.spi.function.SchemaFunctionName;
+import io.trino.spi.ptf.ConnectorTableFunctionHandle;
 
 import javax.inject.Inject;
 
@@ -56,13 +58,11 @@ public final class ClassLoaderSafeConnectorSplitManager
     public ConnectorSplitSource getSplits(
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
-            ConnectorTableHandle table,
-            SplitSchedulingStrategy splitSchedulingStrategy,
-            DynamicFilter dynamicFilter,
-            Constraint constraint)
+            SchemaFunctionName name,
+            ConnectorTableFunctionHandle function)
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.getSplits(transaction, session, table, splitSchedulingStrategy, dynamicFilter, constraint);
+            return delegate.getSplits(transaction, session, name, function);
         }
     }
 }

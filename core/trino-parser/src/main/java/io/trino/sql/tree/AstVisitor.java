@@ -417,7 +417,7 @@ public abstract class AstVisitor<R, C>
         return visitExpression(node, context);
     }
 
-    protected R visitArrayConstructor(ArrayConstructor node, C context)
+    protected R visitArray(Array node, C context)
     {
         return visitExpression(node, context);
     }
@@ -582,6 +582,16 @@ public abstract class AstVisitor<R, C>
         return visitTableElement(node, context);
     }
 
+    protected R visitCreateCatalog(CreateCatalog node, C context)
+    {
+        return visitStatement(node, context);
+    }
+
+    protected R visitDropCatalog(DropCatalog node, C context)
+    {
+        return visitStatement(node, context);
+    }
+
     protected R visitCreateSchema(CreateSchema node, C context)
     {
         return visitStatement(node, context);
@@ -663,6 +673,11 @@ public abstract class AstVisitor<R, C>
     }
 
     protected R visitAddColumn(AddColumn node, C context)
+    {
+        return visitStatement(node, context);
+    }
+
+    protected R visitSetColumnType(SetColumnType node, C context)
     {
         return visitStatement(node, context);
     }
@@ -1097,12 +1112,12 @@ public abstract class AstVisitor<R, C>
         return visitNode(node, context);
     }
 
-    protected R visitTableArgument(TableArgument node, C context)
+    protected R visitTableArgument(TableFunctionTableArgument node, C context)
     {
         return visitNode(node, context);
     }
 
-    protected R visitDescriptorArgument(DescriptorArgument node, C context)
+    protected R visitDescriptorArgument(TableFunctionDescriptorArgument node, C context)
     {
         return visitNode(node, context);
     }
@@ -1145,5 +1160,10 @@ public abstract class AstVisitor<R, C>
     protected R visitJsonArray(JsonArray node, C context)
     {
         return visitExpression(node, context);
+    }
+
+    protected R visitEmptyTableTreatment(EmptyTableTreatment node, C context)
+    {
+        return visitNode(node, context);
     }
 }

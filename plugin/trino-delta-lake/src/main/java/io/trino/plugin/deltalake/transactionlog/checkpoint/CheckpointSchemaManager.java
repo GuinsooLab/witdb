@@ -82,7 +82,7 @@ public class CheckpointSchemaManager
 
         commitInfoEntryType = RowType.from(ImmutableList.of(
                 RowType.field("version", BigintType.BIGINT),
-                RowType.field("timestamp", BigintType.BIGINT),
+                RowType.field("timestamp", TimestampType.TIMESTAMP_MILLIS),
                 RowType.field("userId", VarcharType.createUnboundedVarcharType()),
                 RowType.field("userName", VarcharType.createUnboundedVarcharType()),
                 RowType.field("operation", VarcharType.createUnboundedVarcharType()),
@@ -106,7 +106,7 @@ public class CheckpointSchemaManager
         return metadataEntryType;
     }
 
-    public RowType getAddEntryType(MetadataEntry metadataEntry)
+    public RowType getAddEntryType(MetadataEntry metadataEntry, boolean requireWriteStatsAsJson, boolean requireWriteStatsAsStruct)
     {
         List<DeltaLakeColumnMetadata> allColumns = extractSchema(metadataEntry, typeManager);
         List<DeltaLakeColumnMetadata> minMaxColumns = columnsWithStats(metadataEntry, typeManager);
@@ -137,31 +137,33 @@ public class CheckpointSchemaManager
                 RowType.from(allColumns.stream().map(column -> buildNullCountType(Optional.of(column.getPhysicalName()), column.getPhysicalColumnType())).collect(toImmutableList()))));
 
         MapType stringMap = (MapType) typeManager.getType(TypeSignature.mapType(VarcharType.VARCHAR.getTypeSignature(), VarcharType.VARCHAR.getTypeSignature()));
-        List<RowType.Field> addFields = ImmutableList.of(
-                RowType.field("path", VarcharType.createUnboundedVarcharType()),
-                RowType.field("partitionValues", stringMap),
-                RowType.field("size", BigintType.BIGINT),
-                RowType.field("modificationTime", BigintType.BIGINT),
-                RowType.field("dataChange", BooleanType.BOOLEAN),
-                RowType.field("stats", VarcharType.createUnboundedVarcharType()),
-                RowType.field("stats_parsed", RowType.from(statsColumns.build())),
-                RowType.field("tags", stringMap));
+        ImmutableList.Builder<RowType.Field> addFields = ImmutableList.builder();
+        addFields.add(RowType.field("path", VarcharType.createUnboundedVarcharType()));
+        addFields.add(RowType.field("partitionValues", stringMap));
+        addFields.add(RowType.field("size", BigintType.BIGINT));
+        addFields.add(RowType.field("modificationTime", BigintType.BIGINT));
+        addFields.add(RowType.field("dataChange", BooleanType.BOOLEAN));
+        if (requireWriteStatsAsJson) {
+            addFields.add(RowType.field("stats", VarcharType.createUnboundedVarcharType()));
+        }
+        if (requireWriteStatsAsStruct) {
+            addFields.add(RowType.field("stats_parsed", RowType.from(statsColumns.build())));
+        }
+        addFields.add(RowType.field("tags", stringMap));
 
-        return RowType.from(addFields);
+        return RowType.from(addFields.build());
     }
 
     private static RowType.Field buildNullCountType(Optional<String> columnName, Type columnType)
     {
-        if (columnType instanceof RowType) {
-            RowType rowType = (RowType) columnType;
-            if (columnName.isPresent()) {
-                return RowType.field(
-                        columnName.get(),
-                        RowType.from(rowType.getFields().stream().map(field -> buildNullCountType(field.getName(), field.getType())).collect(toImmutableList())));
-            }
-            return RowType.field(RowType.from(rowType.getFields().stream().map(field -> buildNullCountType(field.getName(), field.getType())).collect(toImmutableList())));
+        if (columnType instanceof RowType rowType) {
+            RowType rowTypeFromFields = RowType.from(
+                    rowType.getFields().stream()
+                            .map(field -> buildNullCountType(field.getName(), field.getType()))
+                            .collect(toImmutableList()));
+            return new RowType.Field(columnName, rowTypeFromFields);
         }
-        return columnName.map(name -> RowType.field(name, BigintType.BIGINT)).orElse(RowType.field(BigintType.BIGINT));
+        return new RowType.Field(columnName, BigintType.BIGINT);
     }
 
     public RowType getRemoveEntryType()

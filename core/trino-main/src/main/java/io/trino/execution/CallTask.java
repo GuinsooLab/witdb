@@ -16,7 +16,6 @@ package io.trino.execution;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.ProcedureRegistry;
 import io.trino.metadata.QualifiedObjectName;
@@ -24,6 +23,7 @@ import io.trino.security.AccessControl;
 import io.trino.security.InjectedConnectorAccessControl;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.BlockBuilder;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorAccessControl;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.eventlistener.RoutineInfo;
@@ -55,14 +55,14 @@ import java.util.function.Predicate;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
+import static io.trino.execution.ParameterExtractor.bindParameters;
 import static io.trino.metadata.MetadataUtil.createQualifiedObjectName;
-import static io.trino.spi.StandardErrorCode.CATALOG_NOT_FOUND;
+import static io.trino.metadata.MetadataUtil.getRequiredCatalogHandle;
 import static io.trino.spi.StandardErrorCode.INVALID_ARGUMENTS;
 import static io.trino.spi.StandardErrorCode.INVALID_PROCEDURE_ARGUMENT;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.StandardErrorCode.PROCEDURE_CALL_FAILED;
 import static io.trino.spi.type.TypeUtils.writeNativeValue;
-import static io.trino.sql.ParameterUtils.parameterExtractor;
 import static io.trino.sql.analyzer.SemanticExceptions.semanticException;
 import static io.trino.sql.planner.ExpressionInterpreter.evaluateConstantExpression;
 import static java.util.Arrays.asList;
@@ -104,9 +104,8 @@ public class CallTask
 
         Session session = stateMachine.getSession();
         QualifiedObjectName procedureName = createQualifiedObjectName(session, call, call.getName());
-        CatalogName catalogName = plannerContext.getMetadata().getCatalogHandle(stateMachine.getSession(), procedureName.getCatalogName())
-                .orElseThrow(() -> semanticException(CATALOG_NOT_FOUND, call, "Catalog '%s' does not exist", procedureName.getCatalogName()));
-        Procedure procedure = procedureRegistry.resolve(catalogName, procedureName.asSchemaTableName());
+        CatalogHandle catalogHandle = getRequiredCatalogHandle(plannerContext.getMetadata(), stateMachine.getSession(), call, procedureName.getCatalogName());
+        Procedure procedure = procedureRegistry.resolve(catalogHandle, procedureName.asSchemaTableName());
 
         // map declared argument names to positions
         Map<String, Integer> positions = new HashMap<>();
@@ -118,6 +117,9 @@ public class CallTask
         Predicate<CallArgument> hasName = argument -> argument.getName().isPresent();
         boolean anyNamed = call.getArguments().stream().anyMatch(hasName);
         boolean allNamed = call.getArguments().stream().allMatch(hasName);
+        if (!allNamed && procedure.requiresNamedArguments()) {
+            throw semanticException(INVALID_ARGUMENTS, call, "Only named arguments are allowed for this procedure");
+        }
         if (anyNamed && !allNamed) {
             throw semanticException(INVALID_ARGUMENTS, call, "Named and positional arguments cannot be mixed");
         }
@@ -154,7 +156,7 @@ public class CallTask
 
         // get argument values
         Object[] values = new Object[procedure.getArguments().size()];
-        Map<NodeRef<Parameter>, Expression> parameterLookup = parameterExtractor(call, parameters);
+        Map<NodeRef<Parameter>, Expression> parameterLookup = bindParameters(call, parameters);
         for (Entry<String, CallArgument> entry : names.entrySet()) {
             CallArgument callArgument = entry.getValue();
             int index = positions.get(entry.getKey());
@@ -192,10 +194,10 @@ public class CallTask
         Iterator<Object> valuesIterator = asList(values).iterator();
         for (Class<?> type : methodType.parameterList()) {
             if (ConnectorSession.class.equals(type)) {
-                arguments.add(session.toConnectorSession(catalogName));
+                arguments.add(session.toConnectorSession(catalogHandle));
             }
             else if (ConnectorAccessControl.class.equals(type)) {
-                arguments.add(new InjectedConnectorAccessControl(accessControl, session.toSecurityContext(), catalogName.getCatalogName()));
+                arguments.add(new InjectedConnectorAccessControl(accessControl, session.toSecurityContext(), procedureName.getCatalogName()));
             }
             else {
                 arguments.add(valuesIterator.next());

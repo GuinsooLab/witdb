@@ -16,28 +16,17 @@ package io.trino.plugin.hive.optimizer;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.io.Files;
 import io.trino.Session;
-import io.trino.connector.CatalogName;
 import io.trino.cost.ScalarStatsCalculator;
 import io.trino.metadata.TableHandle;
-import io.trino.plugin.hive.HdfsConfig;
-import io.trino.plugin.hive.HdfsConfiguration;
-import io.trino.plugin.hive.HdfsConfigurationInitializer;
-import io.trino.plugin.hive.HdfsEnvironment;
 import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.HiveColumnProjectionInfo;
-import io.trino.plugin.hive.HiveHdfsConfiguration;
 import io.trino.plugin.hive.HiveTableHandle;
 import io.trino.plugin.hive.HiveTransactionHandle;
-import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.TestingHiveConnectorFactory;
-import io.trino.plugin.hive.authentication.NoHdfsAuthentication;
 import io.trino.plugin.hive.metastore.Database;
 import io.trino.plugin.hive.metastore.HiveMetastore;
-import io.trino.plugin.hive.metastore.HiveMetastoreConfig;
-import io.trino.plugin.hive.metastore.file.FileHiveMetastore;
-import io.trino.plugin.hive.metastore.file.FileHiveMetastoreConfig;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.PrincipalType;
@@ -62,6 +51,8 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.util.Optional;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
@@ -70,6 +61,7 @@ import static io.trino.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static io.trino.plugin.hive.HiveColumnHandle.createBaseColumn;
 import static io.trino.plugin.hive.HiveType.HIVE_INT;
 import static io.trino.plugin.hive.HiveType.toHiveType;
+import static io.trino.plugin.hive.metastore.file.FileHiveMetastore.createTestingFileHiveMetastore;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RowType.field;
@@ -80,6 +72,7 @@ import static io.trino.sql.planner.assertions.PlanMatchPattern.strictProject;
 import static io.trino.sql.planner.assertions.PlanMatchPattern.tableScan;
 import static io.trino.sql.tree.ArithmeticBinaryExpression.Operator.ADD;
 import static io.trino.sql.tree.ArithmeticUnaryExpression.Sign.MINUS;
+import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
@@ -87,34 +80,30 @@ import static java.util.Arrays.asList;
 public class TestConnectorPushdownRulesWithHive
         extends BaseRuleTest
 {
-    private static final String HIVE_CATALOG_NAME = "hive";
     private static final String SCHEMA_NAME = "test_schema";
 
     private static final Type ROW_TYPE = RowType.from(asList(field("a", BIGINT), field("b", BIGINT)));
 
     private File baseDir;
     private HiveMetastore metastore;
+    private CatalogHandle catalogHandle;
 
     private static final Session HIVE_SESSION = testSessionBuilder()
-            .setCatalog(HIVE_CATALOG_NAME)
+            .setCatalog(TEST_CATALOG_NAME)
             .setSchema(SCHEMA_NAME)
             .build();
 
     @Override
     protected Optional<LocalQueryRunner> createLocalQueryRunner()
     {
-        baseDir = Files.createTempDir();
-        HdfsConfig config = new HdfsConfig();
-        HdfsConfiguration configuration = new HiveHdfsConfiguration(new HdfsConfigurationInitializer(config), ImmutableSet.of());
-        HdfsEnvironment environment = new HdfsEnvironment(configuration, config, new NoHdfsAuthentication());
+        try {
+            baseDir = Files.createTempDirectory(null).toFile();
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
 
-        metastore = new FileHiveMetastore(
-                new NodeVersion("test_version"),
-                environment,
-                new HiveMetastoreConfig().isHideDeltaLakeTables(),
-                new FileHiveMetastoreConfig()
-                        .setCatalogDirectory(baseDir.toURI().toString())
-                        .setMetastoreUser("test"));
+        metastore = createTestingFileHiveMetastore(baseDir);
         Database database = Database.builder()
                 .setDatabaseName(SCHEMA_NAME)
                 .setOwnerName(Optional.of("public"))
@@ -124,7 +113,8 @@ public class TestConnectorPushdownRulesWithHive
         metastore.createDatabase(database);
 
         LocalQueryRunner queryRunner = LocalQueryRunner.create(HIVE_SESSION);
-        queryRunner.createCatalog(HIVE_CATALOG_NAME, new TestingHiveConnectorFactory(metastore), ImmutableMap.of());
+        queryRunner.createCatalog(TEST_CATALOG_NAME, new TestingHiveConnectorFactory(metastore), ImmutableMap.of());
+        catalogHandle = queryRunner.getCatalogHandle(TEST_CATALOG_NAME);
 
         return Optional.of(queryRunner);
     }
@@ -159,7 +149,7 @@ public class TestConnectorPushdownRulesWithHive
                 Optional.empty());
 
         HiveTableHandle hiveTable = new HiveTableHandle(SCHEMA_NAME, tableName, ImmutableMap.of(), ImmutableList.of(), ImmutableList.of(), Optional.empty());
-        TableHandle table = new TableHandle(new CatalogName(HIVE_CATALOG_NAME), hiveTable, new HiveTransactionHandle(false));
+        TableHandle table = new TableHandle(catalogHandle, hiveTable, new HiveTransactionHandle(false));
 
         HiveColumnHandle fullColumn = partialColumn.getBaseColumn();
 
@@ -187,7 +177,7 @@ public class TestConnectorPushdownRulesWithHive
                                 Assignments.of(p.symbol("struct_of_int", baseType), p.symbol("struct_of_int", baseType).toSymbolReference()),
                                 p.tableScan(
                                         new TableHandle(
-                                                new CatalogName(HIVE_CATALOG_NAME),
+                                                catalogHandle,
                                                 hiveTable.withProjectedColumns(ImmutableSet.of(fullColumn)),
                                                 new HiveTransactionHandle(false)),
                                         ImmutableList.of(p.symbol("struct_of_int", baseType)),
@@ -220,10 +210,10 @@ public class TestConnectorPushdownRulesWithHive
         String tableName = "predicate_test";
         tester().getQueryRunner().execute(format("CREATE TABLE %s (a, b) AS SELECT 5, 6", tableName));
 
-        PushPredicateIntoTableScan pushPredicateIntoTableScan = new PushPredicateIntoTableScan(tester().getPlannerContext(), tester().getTypeAnalyzer());
+        PushPredicateIntoTableScan pushPredicateIntoTableScan = new PushPredicateIntoTableScan(tester().getPlannerContext(), tester().getTypeAnalyzer(), false);
 
         HiveTableHandle hiveTable = new HiveTableHandle(SCHEMA_NAME, tableName, ImmutableMap.of(), ImmutableList.of(), ImmutableList.of(), Optional.empty());
-        TableHandle table = new TableHandle(new CatalogName(HIVE_CATALOG_NAME), hiveTable, new HiveTransactionHandle(false));
+        TableHandle table = new TableHandle(catalogHandle, hiveTable, new HiveTransactionHandle(false));
 
         HiveColumnHandle column = createBaseColumn("a", 0, HIVE_INT, INTEGER, REGULAR, Optional.empty());
 
@@ -255,7 +245,7 @@ public class TestConnectorPushdownRulesWithHive
         PruneTableScanColumns pruneTableScanColumns = new PruneTableScanColumns(tester().getMetadata());
 
         HiveTableHandle hiveTable = new HiveTableHandle(SCHEMA_NAME, tableName, ImmutableMap.of(), ImmutableList.of(), ImmutableList.of(), Optional.empty());
-        TableHandle table = new TableHandle(new CatalogName(HIVE_CATALOG_NAME), hiveTable, new HiveTransactionHandle(false));
+        TableHandle table = new TableHandle(catalogHandle, hiveTable, new HiveTransactionHandle(false));
 
         HiveColumnHandle columnA = createBaseColumn("a", 0, HIVE_INT, INTEGER, REGULAR, Optional.empty());
         HiveColumnHandle columnB = createBaseColumn("b", 1, HIVE_INT, INTEGER, REGULAR, Optional.empty());
@@ -298,7 +288,7 @@ public class TestConnectorPushdownRulesWithHive
                 new ScalarStatsCalculator(tester().getPlannerContext(), tester().getTypeAnalyzer()));
 
         HiveTableHandle hiveTable = new HiveTableHandle(SCHEMA_NAME, tableName, ImmutableMap.of(), ImmutableList.of(), ImmutableList.of(), Optional.empty());
-        TableHandle table = new TableHandle(new CatalogName(HIVE_CATALOG_NAME), hiveTable, new HiveTransactionHandle(false));
+        TableHandle table = new TableHandle(catalogHandle, hiveTable, new HiveTransactionHandle(false));
 
         HiveColumnHandle bigintColumn = createBaseColumn("just_bigint", 1, toHiveType(BIGINT), BIGINT, REGULAR, Optional.empty());
         HiveColumnHandle partialColumn = new HiveColumnHandle(

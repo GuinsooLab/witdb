@@ -23,6 +23,7 @@ import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.LocalQueryRunner;
 import io.trino.testing.QueryRunner;
 import org.intellij.lang.annotations.Language;
+import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
@@ -52,6 +53,14 @@ public class TestGetTableStatisticsOperations
         return localQueryRunner;
     }
 
+    @AfterClass(alwaysRun = true)
+    public void tearDown()
+    {
+        localQueryRunner.close();
+        localQueryRunner = null;
+        metadata = null;
+    }
+
     @BeforeMethod
     public void resetCounters()
     {
@@ -66,7 +75,7 @@ public class TestGetTableStatisticsOperations
                 "WHERE o.orderkey = l.orderkey");
         assertThat(metadata.getMethodInvocations()).containsExactlyInAnyOrderElementsOf(
                 ImmutableMultiset.<CountingAccessMetadata.Methods>builder()
-                        .addCopies(CountingAccessMetadata.Methods.GET_TABLE_STATISTICS, 3)
+                        .addCopies(CountingAccessMetadata.Methods.GET_TABLE_STATISTICS, 2)
                         .build());
     }
 
@@ -78,7 +87,7 @@ public class TestGetTableStatisticsOperations
                 "WHERE o.orderkey = l.orderkey AND c.custkey = o.custkey");
         assertThat(metadata.getMethodInvocations()).containsExactlyInAnyOrderElementsOf(
                 ImmutableMultiset.<CountingAccessMetadata.Methods>builder()
-                        .addCopies(CountingAccessMetadata.Methods.GET_TABLE_STATISTICS, 5)
+                        .addCopies(CountingAccessMetadata.Methods.GET_TABLE_STATISTICS, 3)
                         .build());
     }
 

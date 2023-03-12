@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static io.trino.operator.Operator.NOT_BLOCKED;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public class PrioritizedSplitRunner
@@ -81,15 +82,15 @@ public class PrioritizedSplitRunner
             TimeStat blockedQuantaWallTime,
             TimeStat unblockedQuantaWallTime)
     {
-        this.taskHandle = taskHandle;
+        this.taskHandle = requireNonNull(taskHandle, "taskHandle is null");
         this.splitId = taskHandle.getNextSplitId();
-        this.split = split;
-        this.ticker = ticker;
+        this.split = requireNonNull(split, "split is null");
+        this.ticker = requireNonNull(ticker, "ticker is null");
         this.workerId = NEXT_WORKER_ID.getAndIncrement();
-        this.globalCpuTimeMicros = globalCpuTimeMicros;
-        this.globalScheduledTimeMicros = globalScheduledTimeMicros;
-        this.blockedQuantaWallTime = blockedQuantaWallTime;
-        this.unblockedQuantaWallTime = unblockedQuantaWallTime;
+        this.globalCpuTimeMicros = requireNonNull(globalCpuTimeMicros, "globalCpuTimeMicros is null");
+        this.globalScheduledTimeMicros = requireNonNull(globalScheduledTimeMicros, "globalScheduledTimeMicros is null");
+        this.blockedQuantaWallTime = requireNonNull(blockedQuantaWallTime, "blockedQuantaWallTime is null");
+        this.unblockedQuantaWallTime = requireNonNull(unblockedQuantaWallTime, "unblockedQuantaWallTime is null");
 
         this.updateLevelPriority();
     }
@@ -159,15 +160,17 @@ public class PrioritizedSplitRunner
 
             waitNanos.getAndAdd(startNanos - lastReady.get());
 
-            CpuTimer timer = new CpuTimer();
+            // Do not collect user vs system components of CPU time since it's more expensive and not used here
+            CpuTimer timer = new CpuTimer(ticker, false);
             ListenableFuture<Void> blocked = split.processFor(SPLIT_RUN_QUANTA);
             CpuTimer.CpuDuration elapsed = timer.elapsedTime();
 
-            long quantaScheduledNanos = ticker.read() - startNanos;
+            long endNanos = ticker.read();
+            long quantaScheduledNanos = endNanos - startNanos;
             scheduledNanos.addAndGet(quantaScheduledNanos);
 
             priority.set(taskHandle.addScheduledNanos(quantaScheduledNanos));
-            lastRun.set(ticker.read());
+            lastRun.set(endNanos);
 
             if (blocked == NOT_BLOCKED) {
                 unblockedQuantaWallTime.add(elapsed.getWall());

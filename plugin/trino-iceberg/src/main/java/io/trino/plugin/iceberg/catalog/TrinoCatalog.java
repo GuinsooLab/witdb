@@ -23,6 +23,7 @@ import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.security.TrinoPrincipal;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.Transaction;
 
@@ -47,6 +48,8 @@ import java.util.Optional;
  */
 public interface TrinoCatalog
 {
+    boolean namespaceExists(ConnectorSession session, String namespace);
+
     List<String> listNamespaces(ConnectorSession session);
 
     void dropNamespace(ConnectorSession session, String namespace);
@@ -68,8 +71,13 @@ public interface TrinoCatalog
             SchemaTableName schemaTableName,
             Schema schema,
             PartitionSpec partitionSpec,
+            SortOrder sortOrder,
             String location,
             Map<String, String> properties);
+
+    void registerTable(ConnectorSession session, SchemaTableName tableName, String tableLocation, String metadataLocation);
+
+    void unregisterTable(ConnectorSession session, SchemaTableName tableName);
 
     void dropTable(ConnectorSession session, SchemaTableName schemaTableName);
 
@@ -77,6 +85,7 @@ public interface TrinoCatalog
 
     /**
      * load an Iceberg table
+     *
      * @param session Trino session
      * @param schemaTableName Trino schema and table name
      * @return Iceberg table loaded
@@ -87,6 +96,8 @@ public interface TrinoCatalog
     void updateTableComment(ConnectorSession session, SchemaTableName schemaTableName, Optional<String> comment);
 
     void updateViewComment(ConnectorSession session, SchemaTableName schemaViewName, Optional<String> comment);
+
+    void updateViewColumnComment(ConnectorSession session, SchemaTableName schemaViewName, String columnName, Optional<String> comment);
 
     String defaultTableLocation(ConnectorSession session, SchemaTableName schemaTableName);
 

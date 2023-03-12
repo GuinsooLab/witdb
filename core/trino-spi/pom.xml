@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.trino</groupId>
         <artifactId>trino-root</artifactId>
-        <version>391-SNAPSHOT</version>
+        <version>411-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -35,9 +35,11 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- used by slice and must be listed for plugin dependency enforcer -->
         <dependency>
             <groupId>org.openjdk.jol</groupId>
             <artifactId>jol-core</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- for testing -->
@@ -90,6 +92,18 @@
         </dependency>
 
         <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.openjdk.jmh</groupId>
             <artifactId>jmh-core</artifactId>
             <scope>test</scope>
@@ -129,60 +143,121 @@
 
         <plugins>
             <plugin>
-                <groupId>org.codehaus.gmaven</groupId>
-                <artifactId>groovy-maven-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>released-version</id>
-                        <phase>generate-test-resources</phase>
-                        <goals>
-                            <goal>execute</goal>
-                        </goals>
-                        <configuration>
-                            <source>
-                                def match = project.version =~ /(\d+)(?:-SNAPSHOT)?/
-                                if (!match.matches()) {
-                                    throw new RuntimeException("Invalid version: " + project.version)
-                                }
-                                int version = (match.group(1) as int) - 1
-                                project.properties.setProperty('releasedVersion', version as String)
-                            </source>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <dependencies>
+                    <!-- allow both JUnit and TestNG -->
+                    <dependency>
+                        <groupId>org.apache.maven.surefire</groupId>
+                        <artifactId>surefire-junit-platform</artifactId>
+                        <version>${dep.plugin.surefire.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.apache.maven.surefire</groupId>
+                        <artifactId>surefire-testng</artifactId>
+                        <version>${dep.plugin.surefire.version}</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
+            <plugin>
+                <groupId>org.revapi</groupId>
+                <artifactId>revapi-maven-plugin</artifactId>
+                <version>0.14.7</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.revapi</groupId>
+                        <artifactId>revapi-java</artifactId>
+                        <version>0.27.0</version>
+                    </dependency>
+                </dependencies>
                 <executions>
                     <execution>
-                        <id>copy</id>
-                        <phase>generate-test-resources</phase>
                         <goals>
-                            <goal>copy</goal>
+                            <goal>check</goal>
                         </goals>
-                        <configuration>
-                            <skip>false</skip>
-                            <artifactItems>
-                                <artifactItem>
-                                    <groupId>io.trino</groupId>
-                                    <artifactId>trino-spi</artifactId>
-                                    <version>${releasedVersion}</version>
-                                    <type>jar</type>
-                                    <outputDirectory>${released-artifacts.dir}</outputDirectory>
-                                </artifactItem>
-                                <artifactItem>
-                                    <!-- slice is needed when loading trino-spi classes for backward compatibility tests -->
-                                    <groupId>io.airlift</groupId>
-                                    <artifactId>slice</artifactId>
-                                    <type>jar</type>
-                                    <outputDirectory>${released-artifacts.dir}</outputDirectory>
-                                </artifactItem>
-                            </artifactItems>
-                        </configuration>
                     </execution>
                 </executions>
+                <configuration>
+                    <ignoreSuggestionsFormat>xml</ignoreSuggestionsFormat>
+                    <analysisConfiguration>
+                        <revapi.filter>
+                            <elements>
+                                <exclude>
+                                    <item>
+                                        <matcher>java</matcher>
+                                        <match>@io.trino.spi.Experimental(*) ^*;</match>
+                                    </item>
+                                </exclude>
+                            </elements>
+                        </revapi.filter>
+                        <revapi.differences>
+                            <ignore>true</ignore>
+                            <differences>
+                                <!-- Allow adding new annotations (such as @Nullable) -->
+                                <item>
+                                    <code>java.annotation.added</code>
+                                </item>
+                                <!-- Allow changing enum constant order (e.g., StandardErrorCode) -->
+                                <item>
+                                    <code>java.field.enumConstantOrderChanged</code>
+                                </item>
+                                <!-- Allow arbitrary changes to unstable APIs -->
+                                <item>
+                                    <regex>true</regex>
+                                    <code>java.method.numberOfParametersChanged</code>
+                                    <old>
+                                        <matcher>java</matcher>
+                                        <match>@io.trino.spi.Unstable *;</match>
+                                    </old>
+                                </item>
+                                <!-- Allow removing things that were previously deprecated -->
+                                <item>
+                                    <regex>true</regex>
+                                    <code>java\.(class|method|field)\.removed</code>
+                                    <old>
+                                        <matcher>java</matcher>
+                                        <match>@java.lang.Deprecated(*) ^*;</match>
+                                    </old>
+                                </item>
+                                <!-- Revapi tries to compare any API with its previous version -->
+                                <!-- If it can't download the old version, if falls back to comparing with an empty file -->
+                                <!-- This can lead to errors which are not shown in daily development where local Maven cache has the old version -->
+                                <item>
+                                    <ignore>true</ignore>
+                                    <code>java.class.externalClassExposedInAPI</code>
+                                    <new>class io.airlift.slice.BasicSliceInput</new>
+                                    <justification>Trino SPI depends on Airlift</justification>
+                                </item>
+                                <item>
+                                    <ignore>true</ignore>
+                                    <code>java.class.externalClassExposedInAPI</code>
+                                    <new>class io.airlift.slice.Slice</new>
+                                    <justification>Trino SPI depends on Airlift</justification>
+                                </item>
+                                <item>
+                                    <ignore>true</ignore>
+                                    <code>java.class.externalClassExposedInAPI</code>
+                                    <new>class io.airlift.slice.SliceInput</new>
+                                    <justification>Trino SPI depends on Airlift</justification>
+                                </item>
+                                <item>
+                                    <ignore>true</ignore>
+                                    <code>java.class.externalClassExposedInAPI</code>
+                                    <new>class io.airlift.slice.SliceOutput</new>
+                                    <justification>Trino SPI depends on Airlift</justification>
+                                </item>
+                                <!-- Backwards incompatible changes since the previous release -->
+                                <!-- Any exclusions below can be deleted after each release -->
+                                <item>
+                                    <ignore>true</ignore>
+                                    <code>java.method.numberOfParametersChanged</code>
+                                    <old>method void io.trino.spi.connector.MaterializedViewFreshness::&lt;init&gt;(boolean)</old>
+                                    <new>method void io.trino.spi.connector.MaterializedViewFreshness::&lt;init&gt;(io.trino.spi.connector.MaterializedViewFreshness.Freshness, java.util.Optional&lt;java.time.Instant&gt;)</new>
+                                </item>
+                            </differences>
+                        </revapi.differences>
+                    </analysisConfiguration>
+                </configuration>
             </plugin>
         </plugins>
     </build>

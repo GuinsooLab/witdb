@@ -25,7 +25,6 @@ import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
-import io.trino.spi.connector.ConnectorTableProperties;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.ConstraintApplicationResult;
 import io.trino.spi.connector.SchemaTableName;
@@ -73,7 +72,6 @@ public class RedisMetadata
             RedisConnectorConfig redisConnectorConfig,
             Supplier<Map<SchemaTableName, RedisTableDescription>> redisTableDescriptionSupplier)
     {
-        requireNonNull(redisConnectorConfig, "redisConnectorConfig is null");
         hideInternalColumns = redisConnectorConfig.isHideInternalColumns();
 
         log.debug("Loading redis table definitions from %s", redisConnectorConfig.getTableDescriptionDir().getAbsolutePath());
@@ -275,12 +273,6 @@ public class RedisMetadata
     public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
         return ((RedisColumnHandle) columnHandle).getColumnMetadata();
-    }
-
-    @Override
-    public ConnectorTableProperties getTableProperties(ConnectorSession session, ConnectorTableHandle tableHandle)
-    {
-        return new ConnectorTableProperties();
     }
 
     @VisibleForTesting
