@@ -1,0 +1,40 @@
+# Pull Request Labeler Github Action Configuration: https://github.com/marketplace/actions/labeler
+"tests:hive":
+  - lib/trino-orc/**
+  - lib/trino-parquet/**
+  - lib/trino-hive-formats/**
+  - plugin/trino-hive-hadoop2/**
+  - plugin/trino-hive/**
+  - testing/trino-product-tests/**
+
+jdbc:
+  - client/trino-jdbc/**
+
+bigquery:
+  - plugin/trino-bigquery/**
+
+delta-lake:
+  - plugin/trino-delta-lake/**
+
+hive:
+  - plugin/trino-hive/**
+  - plugin/trino-hive-hadoop2/**
+
+hudi:
+  - plugin/trino-hudi/**
+
+iceberg:
+  - plugin/trino-iceberg/**
+
+mongodb:
+  - plugin/trino-mongodb/**
+
+docs:
+  - docs/**
+
+release-notes:
+  - docs/src/main/sphinx/release/**
+  - docs/src/main/sphinx/release.rst
+
+ui:
+  - core/trino-main/src/main/resources/webapp/**
