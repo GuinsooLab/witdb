@@ -2,9 +2,9 @@
 <project version="4">
   <component name="CompilerConfiguration">
     <annotationProcessing>
-      <profile name="Maven default annotation processors profile" enabled="true">
-        <sourceOutputDir name="target/generated-sources/annotations" />
-        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+      <profile name="Annotation profile for trino-root" enabled="true">
+        <sourceOutputDir name="../../target/generated-sources/annotations" />
+        <sourceTestOutputDir name="../../target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="trino-parquet" />
         <module name="trino-testing-services" />
@@ -18,64 +18,71 @@
         <module name="trino-iceberg" />
         <module name="trino-elasticsearch" />
         <module name="trino-kafka" />
+        <module name="trino-hive-formats" />
         <module name="trino-product-tests" />
         <module name="trino-spi" />
         <module name="trino-geospatial-toolkit" />
+        <module name="trino-product-tests-launcher" />
         <module name="trino-mongodb" />
         <module name="trino-phoenix5" />
-        <module name="trino-product-tests-launcher" />
         <module name="trino-record-decoder" />
-        <module name="trino-benchto-benchmarks" />
-        <module name="trino-tests" />
         <module name="trino-testing-containers" />
+        <module name="trino-tests" />
+        <module name="trino-benchto-benchmarks" />
         <module name="trino-blackhole" />
         <module name="trino-main" />
         <module name="trino-ml" />
         <module name="trino-exchange-filesystem" />
-        <module name="trino-redis" />
         <module name="trino-testing" />
+        <module name="trino-redis" />
         <module name="trino-orc" />
-        <module name="trino-thrift" />
         <module name="trino-clickhouse" />
+        <module name="trino-thrift" />
         <module name="trino-testing-kafka" />
         <module name="trino-server-main" />
         <module name="trino-collect" />
         <module name="trino-proxy" />
         <module name="trino-server-dev" />
-        <module name="trino-sqlserver" />
         <module name="trino-array" />
+        <module name="trino-sqlserver" />
         <module name="trino-verifier" />
         <module name="trino-benchmark" />
         <module name="trino-session-property-managers" />
         <module name="trino-cassandra" />
         <module name="trino-test-jdbc-compatibility-old-driver" />
         <module name="trino-plugin-reader" />
+        <module name="trino-mysql-event-listener" />
         <module name="trino-memory-context" />
         <module name="trino-kinesis" />
         <module name="trino-mysql" />
-        <module name="trino-server-rpm" />
         <module name="trino-parser" />
+        <module name="trino-server-rpm" />
         <module name="trino-delta-lake" />
         <module name="trino-tpch" />
-        <module name="trino-geospatial" />
         <module name="trino-test-jdbc-compatibility-old-server" />
+        <module name="trino-geospatial" />
         <module name="trino-faulttolerant-tests" />
-        <module name="trino-rcfile" />
         <module name="trino-google-sheets" />
+        <module name="trino-hudi" />
         <module name="trino-atop" />
         <module name="trino-mariadb" />
+        <module name="trino-ignite" />
+        <module name="trino-benchmark-queries" />
+        <module name="trino-hdfs" />
         <module name="trino-prometheus" />
         <module name="trino-resource-group-managers" />
-        <module name="trino-postgresql" />
         <module name="trino-hadoop-toolkit" />
-        <module name="trino-kudu" />
+        <module name="trino-postgresql" />
+        <module name="trino-thrift-api" />
         <module name="trino-singlestore" />
-        <module name="trino-base-jdbc" />
+        <module name="trino-kudu" />
         <module name="trino-druid" />
+        <module name="trino-base-jdbc" />
         <module name="trino-cli" />
         <module name="trino-jdbc" />
         <module name="trino-bigquery" />
         <module name="trino-local-file" />
+        <module name="trino-exchange-hdfs" />
         <module name="trino-plugin-toolkit" />
         <module name="trino-raptor-legacy" />
         <module name="trino-hive-hadoop2" />
@@ -83,59 +90,22 @@
         <module name="trino-oracle" />
         <module name="trino-http-event-listener" />
         <module name="trino-hive" />
-        <module name="trino-teradata-functions" />
         <module name="trino-matching" />
+        <module name="trino-teradata-functions" />
         <module name="trino-testing-resources" />
         <module name="trino-pinot" />
         <module name="trino-memory" />
         <module name="trino-phoenix5-patched" />
         <module name="trino-example-http" />
+        <module name="trino-filesystem" />
         <module name="trino-server" />
-      </profile>
-      <profile name="Annotation profile for Unknown" enabled="true">
-        <sourceOutputDir name="../../target/generated-sources/annotations" />
-        <sourceTestOutputDir name="../../target/generated-test-sources/test-annotations" />
-        <outputRelativeToContentRoot value="true" />
-        <module name="wrapper" />
-      </profile>
-      <profile name="Annotation profile for .mvn" enabled="true">
-        <sourceOutputDir name="../target/generated-sources/annotations" />
-        <sourceTestOutputDir name="../target/generated-test-sources/test-annotations" />
-        <outputRelativeToContentRoot value="true" />
-        <module name=".mvn" />
-      </profile>
-      <profile name="Annotation profile for trino-root" enabled="true">
-        <sourceOutputDir name="target/generated-sources/annotations" />
-        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
-        <outputRelativeToContentRoot value="true" />
-        <processorPath useClasspath="false">
-          <entry name="$MAVEN_REPOSITORY$/io/airlift/drift/drift-javadoc/1.14/drift-javadoc-1.14.jar" />
-          <entry name="$MAVEN_REPOSITORY$/io/airlift/drift/drift-api/1.14/drift-api-1.14.jar" />
-          <entry name="$MAVEN_REPOSITORY$/com/squareup/javapoet/1.9.0/javapoet-1.9.0.jar" />
-          <entry name="$MAVEN_REPOSITORY$/io/takari/maven/plugins/takari-plugin-testing/2.9.1/takari-plugin-testing-2.9.1.jar" />
-          <entry name="$MAVEN_REPOSITORY$/junit/junit/4.12/junit-4.12.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/codehaus/plexus/plexus-utils/3.0.21/plexus-utils-3.0.21.jar" />
-          <entry name="$MAVEN_REPOSITORY$/io/takari/maven/plugins/takari-plugin-integration-testing/2.9.1/takari-plugin-integration-testing-2.9.1.pom" />
-          <entry name="$MAVEN_REPOSITORY$/org/apache/commons/commons-exec/1.2/commons-exec-1.2.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/codehaus/plexus/plexus-classworlds/2.5.2/plexus-classworlds-2.5.2.jar" />
-          <entry name="$MAVEN_REPOSITORY$/io/takari/m2e/workspace/org.eclipse.m2e.workspace.cli/0.4.0/org.eclipse.m2e.workspace.cli-0.4.0.jar" />
-          <entry name="$MAVEN_REPOSITORY$/javax/inject/javax.inject/1/javax.inject-1.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/codehaus/plexus/plexus-component-annotations/1.5.5/plexus-component-annotations-1.5.5.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/apache/commons/commons-compress/1.9/commons-compress-1.9.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/assertj/assertj-core/3.5.2/assertj-core-3.5.2.jar" />
-          <entry name="$MAVEN_REPOSITORY$/com/google/guava/guava/24.1-jre/guava-24.1-jre.jar" />
-          <entry name="$MAVEN_REPOSITORY$/com/google/code/findbugs/jsr305/1.3.9/jsr305-1.3.9.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/checkerframework/checker-compat-qual/2.0.0/checker-compat-qual-2.0.0.jar" />
-          <entry name="$MAVEN_REPOSITORY$/com/google/errorprone/error_prone_annotations/2.1.3/error_prone_annotations-2.1.3.jar" />
-          <entry name="$MAVEN_REPOSITORY$/com/google/j2objc/j2objc-annotations/1.1/j2objc-annotations-1.1.jar" />
-          <entry name="$MAVEN_REPOSITORY$/org/codehaus/mojo/animal-sniffer-annotations/1.14/animal-sniffer-annotations-1.14.jar" />
-        </processorPath>
-        <module name="trino-thrift-api" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
+      <module name=".mvn" target="1.5" />
       <module name="trino-docs" target="11" />
+      <module name="trino-rcfile" target="11" />
+      <module name="wrapper" target="1.5" />
     </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
@@ -174,7 +144,7 @@
       <module name="trino-kinesis" options="-parameters" />
       <module name="trino-kudu" options="-parameters" />
       <module name="trino-local-file" options="-parameters" />
-      <module name="trino-main" options="-parameters --add-modules java.base" />
+      <module name="trino-main" options="-parameters" />
       <module name="trino-mariadb" options="-parameters" />
       <module name="trino-matching" options="-parameters" />
       <module name="trino-memory" options="-parameters" />
@@ -219,7 +189,7 @@
       <module name="trino-testing-kafka" options="-parameters" />
       <module name="trino-testing-resources" options="-parameters" />
       <module name="trino-testing-services" options="-parameters" />
-      <module name="trino-tests" options="-parameters --add-modules java.base" />
+      <module name="trino-tests" options="-parameters" />
       <module name="trino-thrift" options="-parameters" />
       <module name="trino-thrift-api" options="-parameters" />
       <module name="trino-thrift-testing-server" options="-parameters" />
